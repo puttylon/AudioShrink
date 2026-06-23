@@ -19,7 +19,7 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.1 | Grundgerüst (Walking Skeleton) | ✅ fertig |
 | 0.2 | Inkrementell & robust | ✅ fertig |
 | 0.3 | Intelligente Bitrate | ✅ fertig |
-| 0.4 | Spiegel-Bereinigung (Cleanup) | offen |
+| 0.4 | Spiegel-Bereinigung (Cleanup) | ✅ fertig |
 | 0.5 | Album-Cover-Deduplizierung | offen |
 | 0.6 | Cover-Optimierung & -Entfernung | offen |
 | 0.7 | Lossy-Re-Encode (optional) | offen |

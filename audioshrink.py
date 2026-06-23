@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """AudioShrink – verkleinert Musiksammlungen nach Opus.
 
-Version 0.3 (intelligente Bitrate):
+Version 0.4 (Spiegel-Bereinigung):
   - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET.
   - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
     aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
   - Alle anderen Dateien werden 1:1 kopiert.
   - Bereits aktuelle Ziele werden übersprungen (mtime/Größe); --force erzwingt.
+  - Verwaiste Ziele (ohne Quelle) werden entfernt; abschaltbar mit --no-cleanup.
+  - --dry-run zeigt alle Aktionen (inkl. Löschungen) nur an.
   - Pro-Datei-Fehler brechen den Lauf nicht ab.
 
-Noch nicht enthalten (siehe ROADMAP.md): Cleanup, Cover-Deduplizierung,
+Noch nicht enthalten (siehe ROADMAP.md): Cover-Deduplizierung,
 Lossy-Re-Encode, Parallelisierung.
 """
 from __future__ import annotations
@@ -23,13 +25,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # --- Konfiguration -----------------------------------------------------------
 LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc liest diese nativ
 IGNORE_DIRS = {"@eaDir"}                             # System-/Cache-Ordner
 TARGET_EXT = "opus"
 MTIME_TOLERANCE = 1                                  # s; gegen Dateisystem-Rundung
+
+# Eine Ziel-.opus kann aus einer verlustfreien Quelle transkodiert ODER aus
+# einer vorhandenen .opus-Quelle kopiert worden sein.
+OPUS_SOURCE_CANDIDATES = LOSSLESS_FORMATS | {TARGET_EXT}
 
 # Bitratenwahl
 SPEECH_GENRES = {"hörbuch", "audiobook", "speech", "podcast", "spoken", "hörspiel"}
@@ -220,7 +226,7 @@ def copy(src: Path, dst: Path) -> bool:
 
 
 # --- Hauptverarbeitung -------------------------------------------------------
-def run(source: Path, target: Path, force: bool) -> int:
+def run(source: Path, target: Path, force: bool, dry_run: bool) -> int:
     converted = copied = skipped = errors = 0
 
     for src in iter_source_files(source, target):
@@ -234,8 +240,12 @@ def run(source: Path, target: Path, force: bool) -> int:
                 log.debug("übersprungen (aktuell): %s", rel)
                 continue
 
-            dst.parent.mkdir(parents=True, exist_ok=True)
             if is_copy:
+                if dry_run:
+                    log.info("[DRY-RUN] würde kopieren: %s", rel)
+                    copied += 1
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
                 if copy(src, dst):
                     copied += 1
                     log.info("kopiert: %s", rel)
@@ -245,6 +255,11 @@ def run(source: Path, target: Path, force: bool) -> int:
                 info = analyze_audio(src)
                 bitrate = determine_bitrate(info)
                 tuning = opus_tuning(info)
+                if dry_run:
+                    log.info("[DRY-RUN] würde konvertieren: %s [%d kbps]", rel, bitrate)
+                    converted += 1
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
                 if transcode(src, dst, bitrate, tuning):
                     converted += 1
                     log.info("konvertiert: %s [%d kbps]", rel, bitrate)
@@ -261,6 +276,96 @@ def run(source: Path, target: Path, force: bool) -> int:
     return 2 if errors else 0
 
 
+# --- Bereinigung -------------------------------------------------------------
+def source_has_counterpart(target_file: Path, source: Path, target: Path) -> bool:
+    """True, wenn es zur Zieldatei eine passende Quelle gibt."""
+    rel_parent = target_file.parent.relative_to(target)
+    name = target_file.name
+    ext = target_file.suffix.lower().lstrip(".")
+    if ext == TARGET_EXT:
+        stem = name[: -(len(TARGET_EXT) + 1)]  # Endung per String entfernen (punktsicher)
+        return any(
+            (source / rel_parent / (stem + "." + e)).exists()
+            for e in OPUS_SOURCE_CANDIDATES
+        )
+    return (source / rel_parent / name).exists()
+
+
+def _remove(path: Path, dry_run: bool, recursive: bool = False) -> int:
+    """Entfernt path. Gibt 1 zurück, wenn entfernt (bzw. im Dry-Run gemeldet)."""
+    if dry_run:
+        log.info("[DRY-RUN] würde entfernen: %s", path)
+        return 1
+    try:
+        if recursive:
+            shutil.rmtree(path)
+        elif path.is_dir():
+            path.rmdir()
+        else:
+            path.unlink()
+        log.info("entfernt: %s", path)
+        return 1
+    except OSError as exc:
+        log.error("Konnte nicht entfernen: %s (%s)", path, exc)
+        return 0
+
+
+def cleanup_target(source: Path, target: Path, dry_run: bool) -> None:
+    log.info("Bereinigung (%s) ...", "DRY-RUN" if dry_run else "LÖSCHEN")
+    removed = 0
+
+    def keep_dirs(root_path: Path, dirs, drop_orphans: bool):
+        """Filtert ignorierte/versteckte Ordner; optional auch verwaiste."""
+        kept = []
+        for d in sorted(dirs):
+            if d in IGNORE_DIRS or d.startswith("."):
+                continue
+            rel = (root_path / d).relative_to(target)
+            is_orphan = not (source / rel).is_dir()
+            if drop_orphans and is_orphan:
+                continue
+            kept.append((d, is_orphan))
+        return kept
+
+    # 1) Verwaiste Verzeichnisse komplett entfernen
+    for root, dirs, _files in os.walk(target, topdown=True):
+        root_path = Path(root)
+        survivors = []
+        for d, is_orphan in keep_dirs(root_path, dirs, drop_orphans=False):
+            if is_orphan:
+                removed += _remove(root_path / d, dry_run, recursive=True)
+            else:
+                survivors.append(d)
+        dirs[:] = survivors  # verwaiste nicht betreten
+
+    # 2) Verwaiste Dateien entfernen (nur in noch gültige Ordner absteigen)
+    for root, dirs, files in os.walk(target, topdown=True):
+        root_path = Path(root)
+        dirs[:] = [d for d, _ in keep_dirs(root_path, dirs, drop_orphans=True)]
+        for name in sorted(files):
+            if name.startswith("."):
+                continue
+            fpath = root_path / name
+            if not source_has_counterpart(fpath, source, target):
+                removed += _remove(fpath, dry_run)
+
+    # 3) Leere Verzeichnisse entfernen (bottom-up)
+    for root, _dirs, _files in os.walk(target, topdown=False):
+        root_path = Path(root)
+        if root_path == target:
+            continue
+        if any(p in IGNORE_DIRS for p in root_path.relative_to(target).parts):
+            continue
+        try:
+            if not any(root_path.iterdir()):
+                removed += _remove(root_path, dry_run)
+        except OSError:
+            pass
+
+    verb = "würden entfernt" if dry_run else "entfernt"
+    log.info("Bereinigung abgeschlossen | %d Objekte %s", removed, verb)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="audioshrink",
@@ -268,6 +373,14 @@ def main(argv=None) -> int:
     )
     parser.add_argument("source", help="Quellverzeichnis")
     parser.add_argument("target", help="Zielverzeichnis")
+    parser.add_argument(
+        "--no-cleanup", dest="cleanup", action="store_false",
+        help="Verwaiste Ziel-Dateien/-Ordner NICHT löschen",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Alle Aktionen (inkl. Löschungen) nur anzeigen, nichts ausführen",
+    )
     parser.add_argument(
         "--force", action="store_true",
         help="Alle Dateien neu verarbeiten (Aktualitätsprüfung ignorieren)",
@@ -298,10 +411,18 @@ def main(argv=None) -> int:
     if source == target:
         log.error("Quelle und Ziel dürfen nicht identisch sein")
         return 1
-    target.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        target.mkdir(parents=True, exist_ok=True)
 
     log.info("Start | Quelle=%s Ziel=%s", source, target)
-    return run(source, target, force=args.force)
+    exit_code = run(source, target, force=args.force, dry_run=args.dry_run)
+
+    if args.cleanup:
+        cleanup_target(source, target, dry_run=args.dry_run)
+    else:
+        log.info("Aufräumen übersprungen (--no-cleanup)")
+
+    return exit_code
 
 
 if __name__ == "__main__":
