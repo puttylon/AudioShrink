@@ -23,7 +23,7 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.5 | Album-Cover-Deduplizierung | ✅ fertig |
 | 0.6 | Cover-Optimierung & -Entfernung | ✅ fertig (mit 0.7) |
 | 0.7 | Lossy-Re-Encode (optional) | ✅ fertig (mit 0.6) |
-| 0.8 | Parallelisierung & Performance | offen (Standard: 4 Jobs) |
+| 0.8 | Parallelisierung & Performance | ✅ fertig (Standard: 4 Jobs) |
 | 0.9 | Härtung, Tests & Doku | offen |
 | 1.0 | Release | offen |
 
