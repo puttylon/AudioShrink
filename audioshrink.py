@@ -36,7 +36,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 DEFAULT_JOBS = 4
 
 # --- Konfiguration -----------------------------------------------------------
@@ -617,7 +617,16 @@ def source_has_counterpart(target_file: Path, source: Path, target: Path,
             (source / rel_parent / (stem + "." + e)).exists()
             for e in candidates
         )
-    return (source / rel_parent / name).exists()
+
+    src_file = source / rel_parent / name
+    if not src_file.exists():
+        return False
+    # Mit --reencode-lossy wird eine verlustbehaftete Quelle ggf. zu .opus – dann
+    # ist die gleichnamige Nicht-Opus-Datei im Ziel überholt (Ziel sollte .opus sein).
+    if (reencode_lossy and ext in LOSSY_FORMATS
+            and reencode_is_sensible(analyze_audio(src_file))):
+        return False
+    return True
 
 
 def _remove(path: Path, dry_run: bool, recursive: bool = False) -> int:
