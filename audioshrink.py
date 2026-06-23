@@ -30,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 # --- Konfiguration -----------------------------------------------------------
 LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc liest diese nativ
@@ -275,19 +275,33 @@ def transcode(src: Path, dst: Path, bitrate: int, tuning: str,
     ]
     if discard_pictures:
         cmd.append("--discard-pictures")
-    cmd += [str(src), str(dst)]
+
+    # Encode zuerst in eine temporäre Datei (z.B. file.opus.tmp). Nur nach
+    # erfolgreichem Abschluss wird die Datei atomar auf den endgültigen Namen
+    # verschoben. So bleiben bei Abbruch keine unvollständigen Dateien mit dem
+    # finalen Namen zurück.
+    tmp_dst = dst.with_name(dst.name + ".tmp")
+    cmd += [str(src), str(tmp_dst)]
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
         )
     except OSError as exc:
         log.error("Konvertierung fehlgeschlagen: %s (%s)", src, exc)
-        safe_unlink(dst)
+        safe_unlink(tmp_dst)
         return False
     if result.returncode != 0:
         log.error("Konvertierung fehlgeschlagen: %s\n%s", src, result.stderr.strip())
-        safe_unlink(dst)
+        safe_unlink(tmp_dst)
         return False
+
+    try:
+        os.replace(tmp_dst, dst)  # atomarer Austausch / Umbenennen
+    except OSError as exc:
+        log.error("Zieldatei konnte nicht umbenannt werden: %s (%s)", dst, exc)
+        safe_unlink(tmp_dst)
+        return False
+
     copy_source_mtime(src, dst)
     return True
 
