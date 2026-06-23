@@ -41,8 +41,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.9.4"
+__version__ = "0.9.5"
 DEFAULT_JOBS = 4
+DEFAULT_COMP = 10   # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
 DEFAULT_REENCODE_MIN_BITRATE = 192   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
 
 # --- Konfiguration -----------------------------------------------------------
@@ -351,13 +352,13 @@ def finalize_album_cover(src_dir: Path, source: Path, target: Path,
 
 
 # --- Verarbeitung einzelner Dateien -----------------------------------------
-def _opusenc_base(bitrate: int, tuning: str, discard_pictures: bool) -> list:
+def _opusenc_base(bitrate: int, tuning: str, discard_pictures: bool, comp: int) -> list:
     cmd = [
         "opusenc",
         "--bitrate", str(bitrate),
         "--vbr",
         tuning,                 # --music oder --speech
-        "--comp", "10",
+        "--comp", str(comp),
         "--framesize", "20",
         "--quiet",
     ]
@@ -367,11 +368,11 @@ def _opusenc_base(bitrate: int, tuning: str, discard_pictures: bool) -> list:
 
 
 def transcode(src: Path, dst: Path, bitrate: int, tuning: str,
-              discard_pictures: bool):
+              discard_pictures: bool, comp: int):
     """Verlustfreie Quelle (FLAC/WAV/AIFF) direkt mit opusenc nach Opus.
     Rückgabe: (ok, fehlermeldung|None)."""
     tmp_dst = dst.with_name(dst.name + ".tmp")
-    cmd = _opusenc_base(bitrate, tuning, discard_pictures) + [str(src), str(tmp_dst)]
+    cmd = _opusenc_base(bitrate, tuning, discard_pictures, comp) + [str(src), str(tmp_dst)]
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
@@ -440,14 +441,10 @@ def extract_cover_ffmpeg(src: Path):
 
 
 def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
-                    info: dict, discard_pictures: bool, via_tempfile: bool = False):
-    """Verlustbehaftete Quelle re-encodieren: ffmpeg dekodiert nach WAV, opusenc
-    encodiert. Metadaten und (sofern gewünscht) Cover werden neu gesetzt.
-    Rückgabe: (ok, fehlermeldung|None).
-
-    via_tempfile=False: Pipe (ffmpeg | opusenc), Standard.
-    via_tempfile=True:  erst temporäre WAV (im Zielordner), dann opusenc – zum
-                        Messen, ob das auf dem Zielsystem schneller ist."""
+                    info: dict, discard_pictures: bool, comp: int):
+    """Verlustbehaftete Quelle re-encodieren: ffmpeg dekodiert nach WAV (Pipe),
+    opusenc encodiert. Metadaten und (sofern gewünscht) Cover werden neu gesetzt.
+    Rückgabe: (ok, fehlermeldung|None)."""
     tmp_dst = dst.with_name(dst.name + ".tmp")
     pic_tmp = None
     pic_opts = []
@@ -456,46 +453,29 @@ def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
         if pic_tmp:
             pic_opts = ["--picture", "3||||" + str(pic_tmp)]
 
-    base_opts = (_opusenc_base(bitrate, tuning, discard_pictures)
-                 + build_metadata_opts(info) + pic_opts)
+    opus_cmd = (_opusenc_base(bitrate, tuning, discard_pictures, comp)
+                + ["--ignorelength"] + build_metadata_opts(info) + pic_opts
+                + ["-", str(tmp_dst)])
+    ff_cmd = ["ffmpeg", "-v", "error", "-i", str(src), "-f", "wav", "-"]
 
     ok = False
     err = None
-    wav_tmp = None
     try:
-        if via_tempfile:
-            wav_tmp = dst.with_name(dst.name + ".wav.tmp")  # auf dem Ziel-Volume
-            dec = subprocess.run(
-                ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-f", "wav", str(wav_tmp)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-            if dec.returncode != 0:
-                err = "Dekodieren fehlgeschlagen: %s\n%s" % (src, dec.stderr.strip())
-            else:
-                res = subprocess.run(base_opts + [str(wav_tmp), str(tmp_dst)],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-                ok = res.returncode == 0
-                if not ok:
-                    err = "Re-Encode fehlgeschlagen: %s\n%s" % (src, res.stderr.strip())
-        else:
-            opus_cmd = base_opts + ["--ignorelength", "-", str(tmp_dst)]
-            ff = subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(src), "-f", "wav", "-"],
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            try:
-                res = subprocess.run(opus_cmd, stdin=ff.stdout, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.PIPE, text=True)
-            finally:
-                ff.stdout.close()
-                ff.wait()
-            ok = res.returncode == 0 and ff.returncode == 0
-            if not ok:
-                err = "Re-Encode fehlgeschlagen: %s\n%s" % (src, res.stderr.strip())
+        ff = subprocess.Popen(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            res = subprocess.run(opus_cmd, stdin=ff.stdout, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.PIPE, text=True)
+        finally:
+            ff.stdout.close()
+            ff.wait()
+        ok = res.returncode == 0 and ff.returncode == 0
+        if not ok:
+            err = "Re-Encode fehlgeschlagen: %s\n%s" % (src, res.stderr.strip())
     except OSError as exc:
         err = "Re-Encode fehlgeschlagen: %s (%s)" % (src, exc)
     finally:
         if pic_tmp:
             safe_unlink(pic_tmp)
-        if wav_tmp:
-            safe_unlink(wav_tmp)
 
     if not ok:
         safe_unlink(tmp_dst)
@@ -544,7 +524,7 @@ def copy(src: Path, dst: Path):
 # --- Hauptverarbeitung -------------------------------------------------------
 def process_one(src: Path, source: Path, target: Path, plan: dict, *,
                 force: bool, dry_run: bool, reencode_lossy: bool,
-                reencode_min_bitrate: int, reencode_tempfile: bool,
+                reencode_min_bitrate: int, comp: int,
                 strip_covers: bool, cover_max_size):
     """Verarbeitet eine einzelne Datei (im Worker-Thread). Loggt nicht selbst,
     sondern liefert (status, [(level, message), ...]) zurück, damit die Ausgabe
@@ -590,13 +570,14 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
         if action == "transcode":
             info = analyze_audio(src)
             bitrate = determine_bitrate(info)
-            ok, err = transcode(src, dst, bitrate, opus_tuning(info), plan["discard_embedded"])
+            ok, err = transcode(src, dst, bitrate, opus_tuning(info),
+                                plan["discard_embedded"], comp)
             if ok:
                 return "converted", [("info", "konvertiert: %s [%d kbps]" % (rel, bitrate))]
         elif action == "transcode_lossy":
             bitrate = determine_bitrate(info)
             ok, err = transcode_lossy(src, dst, bitrate, opus_tuning(info), info,
-                                      plan["discard_embedded"], via_tempfile=reencode_tempfile)
+                                      plan["discard_embedded"], comp)
             if ok:
                 return "converted", [("info", "re-encodiert: %s [%d kbps]" % (rel, bitrate))]
         elif action == "cover_resize":
@@ -614,7 +595,7 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
 
 def run(source: Path, target: Path, *, force: bool, dry_run: bool,
         dedup_covers: bool, reencode_lossy: bool, reencode_min_bitrate: int,
-        reencode_tempfile: bool, strip_covers: bool, cover_max_size,
+        comp: int, strip_covers: bool, cover_max_size,
         jobs: int, cleanup: bool) -> int:
     counts = {"converted": 0, "copied": 0, "skipped": 0, "ignored": 0, "error": 0}
     covers = 0
@@ -640,8 +621,7 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
             futures = [
                 pool.submit(process_one, src, source, target, plan,
                             force=force, dry_run=dry_run, reencode_lossy=reencode_lossy,
-                            reencode_min_bitrate=reencode_min_bitrate,
-                            reencode_tempfile=reencode_tempfile,
+                            reencode_min_bitrate=reencode_min_bitrate, comp=comp,
                             strip_covers=strip_covers, cover_max_size=cover_max_size)
                 for src in files
             ]
@@ -807,8 +787,9 @@ def main(argv=None) -> int:
              "(Standard: %d)" % DEFAULT_REENCODE_MIN_BITRATE,
     )
     parser.add_argument(
-        "--reencode-tempfile", action="store_true",
-        help="EXPERIMENTELL: Lossy-Re-Encode über temporäre WAV statt Pipe (zum Messen)",
+        "--comp", type=int, default=DEFAULT_COMP, metavar="0..10",
+        help="opusenc-Komplexität (Standard: %d = beste/langsamste; kleiner = schneller)"
+             % DEFAULT_COMP,
     )
     parser.add_argument(
         "--cover-max-size", type=int, default=None, metavar="PX",
@@ -871,13 +852,13 @@ def main(argv=None) -> int:
         target.mkdir(parents=True, exist_ok=True)
 
     jobs = max(1, args.jobs)
-    log.info("Start | Quelle=%s Ziel=%s | Jobs=%d", source, target, jobs)
+    comp = min(10, max(0, args.comp))
+    log.info("Start | Quelle=%s Ziel=%s | Jobs=%d Comp=%d", source, target, jobs, comp)
     return run(
         source, target,
         force=args.force, dry_run=args.dry_run, dedup_covers=args.dedup_covers,
         reencode_lossy=args.reencode_lossy, reencode_min_bitrate=args.reencode_min_bitrate,
-        reencode_tempfile=args.reencode_tempfile,
-        strip_covers=args.strip_covers, cover_max_size=args.cover_max_size,
+        comp=comp, strip_covers=args.strip_covers, cover_max_size=args.cover_max_size,
         jobs=jobs, cleanup=args.cleanup,
     )
 
