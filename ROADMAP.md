@@ -21,9 +21,9 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.3 | Intelligente Bitrate | ✅ fertig |
 | 0.4 | Spiegel-Bereinigung (Cleanup) | ✅ fertig |
 | 0.5 | Album-Cover-Deduplizierung | ✅ fertig |
-| 0.6 | Cover-Optimierung & -Entfernung | offen |
-| 0.7 | Lossy-Re-Encode (optional) | offen |
-| 0.8 | Parallelisierung & Performance | offen |
+| 0.6 | Cover-Optimierung & -Entfernung | ✅ fertig (mit 0.7) |
+| 0.7 | Lossy-Re-Encode (optional) | ✅ fertig (mit 0.6) |
+| 0.8 | Parallelisierung & Performance | offen (Standard: 4 Jobs) |
 | 0.9 | Härtung, Tests & Doku | offen |
 | 1.0 | Release | offen |
 
@@ -77,8 +77,9 @@ ffmpeg nur als Dekoder.
 
 ## 0.8 — Parallelisierung & Performance
 **Fokus:** Tauglich für 300–500 GB.
-**Neu:** Encoding über mehrere CPU-Kerne (Worker-Pool), `--jobs N`, geordnete Logausgabe,
-Fortschrittsanzeige. **Messung**, ob die Parallelisierung real Zeit spart.
+**Neu:** Encoding über mehrere CPU-Kerne (Worker-Pool), `--jobs N` (**Standard 4**,
+passend zur DS718plus), geordnete Logausgabe, Fortschrittsanzeige. **Messung**, ob die
+Parallelisierung real Zeit spart.
 **Ergebnis:** Große Sammlungen in vertretbarer Zeit.
 
 ## 0.9 — Härtung, Tests & Doku
