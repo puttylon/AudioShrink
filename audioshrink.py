@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AudioShrink – verkleinert Musiksammlungen nach Opus.
 
-Version 0.9.3 (Re-Encode-Politik + Hybrid-Cleanup + robuste Cover-Extraktion):
+Version 0.9.6 (Re-Encode-Politik, Hybrid-Cleanup, Cover-Dedup auch für Lossy):
   - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET (ordnerweise).
   - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
     aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
@@ -41,7 +41,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.9.5"
+__version__ = "0.9.6"
 DEFAULT_JOBS = 4
 DEFAULT_COMP = 10   # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
 DEFAULT_REENCODE_MIN_BITRATE = 192   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
@@ -271,13 +271,45 @@ def embedded_cover_bytes(flac_path: Path):
     return result.stdout
 
 
-def plan_album_cover(files: list) -> dict:
+def _ffmpeg_cover_bytes(path: Path):
+    """Eingebettetes Cover via ffmpeg UNVERÄNDERT kopieren -> Bytes (oder None)."""
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-an",
+             "-map", "0:v:0", "-c", "copy", "-f", "image2pipe", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    return res.stdout if (res.returncode == 0 and res.stdout) else None
+
+
+def embedded_cover_data(path: Path):
+    """Eingebettetes Cover als Bytes: FLAC via metaflac, sonst via ffmpeg."""
+    if ext_of(path) == "flac":
+        return embedded_cover_bytes(path)
+    return _ffmpeg_cover_bytes(path)
+
+
+def _will_transcode(f: Path, reencode_lossy: bool, reencode_min_bitrate: int) -> bool:
+    """Wird diese Datei nach Opus transkodiert? (FLAC immer; Lossy nur wenn
+    re-encodiert wird – Entscheidung über die Bitrate)."""
+    if is_lossless(f):
+        return True
+    if ext_of(f) in LOSSY_FORMATS and reencode_lossy:
+        return should_reencode(analyze_audio(f), reencode_min_bitrate)
+    return False
+
+
+def plan_album_cover(files: list, reencode_lossy: bool,
+                     reencode_min_bitrate: int) -> dict:
     """Entscheidet, ob für dieses Album ein gemeinsames Cover dedupliziert wird.
+    Betrachtet alle TRANSKODIERTEN Tracks (FLAC + re-encodete Lossy wie MP3).
     Rückgabe: {discard_embedded: bool, write_cover: bytes|None}."""
     plan = {"discard_embedded": False, "write_cover": None}
 
-    flacs = [f for f in files if ext_of(f) == "flac"]
-    if not flacs:
+    transcoded = [f for f in files
+                  if _will_transcode(f, reencode_lossy, reencode_min_bitrate)]
+    if not transcoded:
         return plan
 
     # (a) Liegt bereits eine separate Cover-Datei in der Quelle? Dann reicht es,
@@ -286,11 +318,11 @@ def plan_album_cover(files: list) -> dict:
         plan["discard_embedded"] = True
         return plan
 
-    # (b) Haben alle FLAC-Tracks dasselbe eingebettete Cover?
+    # (b) Haben alle transkodierten Tracks dasselbe eingebettete Cover?
     first_bytes = None
     digests = set()
-    for f in flacs:
-        data = embedded_cover_bytes(f)
+    for f in transcoded:
+        data = embedded_cover_data(f)
         if data is None:
             return plan  # mind. ein Track ohne Cover → nicht deduplizieren
         if first_bytes is None:
@@ -413,15 +445,9 @@ def extract_cover_ffmpeg(src: Path):
     Bevorzugt wird der Bildstream UNVERÄNDERT kopiert (kein Encoder nötig, kein
     Qualitätsverlust). Nur falls das scheitert, wird nach JPEG re-encodiert."""
     # 1) Bildstream 1:1 kopieren (robust gegen minimale ffmpeg-Builds)
-    try:
-        res = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(src), "-an",
-             "-map", "0:v:0", "-c", "copy", "-f", "image2pipe", "-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except OSError:
-        return None
-    if res.returncode == 0 and res.stdout:
-        return _write_tmp_image(res.stdout)
+    data = _ffmpeg_cover_bytes(src)
+    if data:
+        return _write_tmp_image(data)
 
     # 2) Fallback: nach JPEG re-encodieren (benötigt mjpeg-Encoder)
     fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
@@ -593,6 +619,23 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
         return "error", [("error", "Übersprungen (Fehler): %s (%s)" % (src, exc))]
 
 
+def _album_needs_work(files: list, source: Path, target: Path) -> bool:
+    """True, wenn mind. eine Audiodatei (noch) zu verarbeiten ist – rein über
+    stat (kein ffprobe), nur um die teure Cover-Planung zu vermeiden."""
+    for f in files:
+        rel = f.relative_to(source)
+        if is_lossless(f):
+            if not is_up_to_date(f, target / rel.with_suffix("." + TARGET_EXT), False):
+                return True
+        elif ext_of(f) in LOSSY_FORMATS:
+            # Lossy kann als .opus (re-encodiert) ODER als Kopie vorliegen
+            opus_dst = target / rel.with_suffix("." + TARGET_EXT)
+            copy_dst = target / rel
+            if not (is_up_to_date(f, opus_dst, False) or is_up_to_date(f, copy_dst, True)):
+                return True
+    return False
+
+
 def run(source: Path, target: Path, *, force: bool, dry_run: bool,
         dedup_covers: bool, reencode_lossy: bool, reencode_min_bitrate: int,
         comp: int, strip_covers: bool, cover_max_size,
@@ -607,15 +650,8 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
             plan = {"discard_embedded": False, "write_cover": None}
             if strip_covers:
                 plan = {"discard_embedded": True, "write_cover": None}
-            elif dedup_covers:
-                need = any(
-                    ext_of(f) == "flac"
-                    and (force or not is_up_to_date(
-                        f, target / f.relative_to(source).with_suffix("." + TARGET_EXT), False))
-                    for f in files
-                )
-                if need:
-                    plan = plan_album_cover(files)
+            elif dedup_covers and (force or _album_needs_work(files, source, target)):
+                plan = plan_album_cover(files, reencode_lossy, reencode_min_bitrate)
 
             # Tracks parallel verarbeiten ...
             futures = [

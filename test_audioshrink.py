@@ -214,33 +214,55 @@ class TestSourceHasCounterpart(unittest.TestCase):
 
 
 class TestPlanAlbumCover(unittest.TestCase):
-    def test_no_flac(self):
-        plan = a.plan_album_cover([Path("a.mp3"), Path("b.jpg")])
+    def test_no_transcoded_tracks(self):
+        # mp3 ohne Re-Encode → nichts transkodiert → kein Dedup
+        plan = a.plan_album_cover([Path("a.mp3"), Path("b.jpg")], False, 192)
         self.assertFalse(plan["discard_embedded"])
         self.assertIsNone(plan["write_cover"])
 
-    def test_existing_separate_cover(self):
-        plan = a.plan_album_cover([Path("01.flac"), Path("cover.jpg")])
+    def test_flac_existing_separate_cover(self):
+        plan = a.plan_album_cover([Path("01.flac"), Path("cover.jpg")], False, 192)
         self.assertTrue(plan["discard_embedded"])
         self.assertIsNone(plan["write_cover"])
 
-    def test_same_embedded_cover(self):
+    def test_flac_same_embedded_cover(self):
         with mock.patch.object(a, "embedded_cover_bytes", return_value=b"\x89PNGsame"):
-            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")])
+            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
         self.assertTrue(plan["discard_embedded"])
         self.assertEqual(plan["write_cover"], b"\x89PNGsame")
 
-    def test_different_embedded_covers(self):
+    def test_flac_different_embedded_covers(self):
         with mock.patch.object(a, "embedded_cover_bytes", side_effect=[b"AAA", b"BBB"]):
-            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")])
+            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
         self.assertFalse(plan["discard_embedded"])
-        self.assertIsNone(plan["write_cover"])
 
-    def test_missing_embedded_cover(self):
+    def test_flac_missing_embedded_cover(self):
         with mock.patch.object(a, "embedded_cover_bytes", return_value=None):
-            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")])
+            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
         self.assertFalse(plan["discard_embedded"])
-        self.assertIsNone(plan["write_cover"])
+
+    def test_mp3_same_cover_dedup(self):
+        # hochbitratige MP3 mit identischem Cover -> Dedup (eine cover.jpg)
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}), \
+             mock.patch.object(a, "_ffmpeg_cover_bytes", return_value=b"\xff\xd8same"):
+            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
+        self.assertTrue(plan["discard_embedded"])
+        self.assertEqual(plan["write_cover"], b"\xff\xd8same")
+
+    def test_mp3_low_bitrate_no_dedup(self):
+        # ≤192 -> wird kopiert, nicht transkodiert -> kein Dedup
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 128}):
+            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
+        self.assertFalse(plan["discard_embedded"])
+
+    def test_mp3_different_covers_no_dedup(self):
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}), \
+             mock.patch.object(a, "_ffmpeg_cover_bytes", side_effect=[b"AAA", b"BBB"]):
+            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
+        self.assertFalse(plan["discard_embedded"])
 
 
 class TestCleanupDirFiles(unittest.TestCase):
