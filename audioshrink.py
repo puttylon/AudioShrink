@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """AudioShrink – verkleinert Musiksammlungen nach Opus.
 
-Version 0.2 (inkrementell & robust):
+Version 0.3 (intelligente Bitrate):
   - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET.
-  - FLAC/WAV/AIFF werden mit fester Bitrate (128 kbps) nach Opus transkodiert.
+  - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
+    aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
   - Alle anderen Dateien werden 1:1 kopiert.
   - Bereits aktuelle Ziele werden übersprungen (mtime/Größe); --force erzwingt.
   - Pro-Datei-Fehler brechen den Lauf nicht ab.
 
-Noch nicht enthalten (siehe ROADMAP.md): intelligente Bitrate, Cleanup,
-Cover-Deduplizierung, Lossy-Re-Encode, Parallelisierung.
+Noch nicht enthalten (siehe ROADMAP.md): Cleanup, Cover-Deduplizierung,
+Lossy-Re-Encode, Parallelisierung.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -21,32 +23,29 @@ import subprocess
 import sys
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # --- Konfiguration -----------------------------------------------------------
 LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc liest diese nativ
 IGNORE_DIRS = {"@eaDir"}                             # System-/Cache-Ordner
 TARGET_EXT = "opus"
-BITRATE = 128                                        # feste Bitrate (bis 0.3)
 MTIME_TOLERANCE = 1                                  # s; gegen Dateisystem-Rundung
 
-OPUSENC_OPTS = [
-    "--bitrate", str(BITRATE),
-    "--vbr", "--music",
-    "--comp", "10",
-    "--framesize", "20",
-    "--quiet",
-]
+# Bitratenwahl
+SPEECH_GENRES = {"hörbuch", "audiobook", "speech", "podcast", "spoken", "hörspiel"}
+SPEECH_BITRATE = 64
 
 log = logging.getLogger("audioshrink")
 
 
 # --- Hilfsfunktionen ---------------------------------------------------------
 def check_dependencies() -> bool:
-    if shutil.which("opusenc") is None:
-        log.error("Pflichtabhängigkeit fehlt: opusenc")
-        return False
-    return True
+    ok = True
+    for tool in ("opusenc", "ffprobe"):
+        if shutil.which(tool) is None:
+            log.error("Pflichtabhängigkeit fehlt: %s", tool)
+            ok = False
+    return ok
 
 
 def is_lossless(path: Path) -> bool:
@@ -104,8 +103,96 @@ def copy_source_mtime(src: Path, dst: Path) -> None:
         log.warning("mtime konnte nicht gesetzt werden: %s (%s)", dst, exc)
 
 
-def transcode(src: Path, dst: Path) -> bool:
-    cmd = ["opusenc", *OPUSENC_OPTS, str(src), str(dst)]
+# --- Audioanalyse & Bitratenwahl --------------------------------------------
+def _tag_get(tags: dict, key: str):
+    if not tags:
+        return None
+    return {k.lower(): v for k, v in tags.items()}.get(key.lower())
+
+
+def analyze_audio(path: Path) -> dict:
+    """Liest Samplerate, Quellbitrate und Genre via ffprobe. Bei Fehlern werden
+    Defaults zurückgegeben, sodass die Konvertierung trotzdem laufen kann."""
+    info = {"sample_rate": 0, "bitrate_kbps": 0, "genre": ""}
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "a:0",
+        "-show_entries",
+        "stream=sample_rate,bit_rate:stream_tags=genre:format=bit_rate:format_tags=genre",
+        "-of", "json",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            log.warning("ffprobe-Analyse fehlgeschlagen: %s", path)
+            return info
+        data = json.loads(result.stdout or "{}")
+    except (OSError, ValueError) as exc:
+        log.warning("ffprobe-Analyse fehlgeschlagen: %s (%s)", path, exc)
+        return info
+
+    fmt = data.get("format", {})
+    stream = (data.get("streams") or [{}])[0]
+
+    sr = stream.get("sample_rate")
+    if sr and sr != "N/A":
+        info["sample_rate"] = int(sr)
+
+    br = stream.get("bit_rate") or fmt.get("bit_rate")
+    if br and br != "N/A":
+        info["bitrate_kbps"] = int(br) // 1000
+
+    genre = _tag_get(stream.get("tags"), "genre") or _tag_get(fmt.get("tags"), "genre")
+    if genre:
+        info["genre"] = genre
+
+    return info
+
+
+def is_speech(genre: str) -> bool:
+    g = (genre or "").lower()
+    return any(term in g for term in SPEECH_GENRES)
+
+
+def determine_bitrate(info: dict) -> int:
+    """Bitrate aus Samplerate (Basis), Genre und Quellbitrate (Deckel)."""
+    sr = info.get("sample_rate", 0)
+    if sr >= 96000:
+        bitrate = 160
+    elif sr >= 48000:
+        bitrate = 128
+    else:
+        bitrate = 96  # u. a. 44,1-kHz-CD-Material
+
+    if is_speech(info.get("genre", "")):
+        bitrate = min(bitrate, SPEECH_BITRATE)
+
+    src_br = info.get("bitrate_kbps", 0)
+    if src_br > 0:                       # nie höher ansetzen als die Quelle
+        bitrate = min(bitrate, src_br)
+
+    return bitrate
+
+
+def opus_tuning(info: dict) -> str:
+    return "--speech" if is_speech(info.get("genre", "")) else "--music"
+
+
+# --- Verarbeitung einzelner Dateien -----------------------------------------
+def transcode(src: Path, dst: Path, bitrate: int, tuning: str) -> bool:
+    cmd = [
+        "opusenc",
+        "--bitrate", str(bitrate),
+        "--vbr",
+        tuning,                 # --music oder --speech
+        "--comp", "10",
+        "--framesize", "20",
+        "--quiet",
+        str(src), str(dst),
+    ]
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
@@ -155,9 +242,12 @@ def run(source: Path, target: Path, force: bool) -> int:
                 else:
                     errors += 1
             else:
-                if transcode(src, dst):
+                info = analyze_audio(src)
+                bitrate = determine_bitrate(info)
+                tuning = opus_tuning(info)
+                if transcode(src, dst, bitrate, tuning):
                     converted += 1
-                    log.info("konvertiert: %s", rel)
+                    log.info("konvertiert: %s [%d kbps]", rel, bitrate)
                 else:
                     errors += 1
         except OSError as exc:
