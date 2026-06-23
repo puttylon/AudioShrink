@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AudioShrink – verkleinert Musiksammlungen nach Opus.
 
-Version 0.9.2 (Re-Encode-Politik + Hybrid-Cleanup):
+Version 0.9.3 (Re-Encode-Politik + Hybrid-Cleanup + robuste Cover-Extraktion):
   - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET (ordnerweise).
   - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
     aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
@@ -41,7 +41,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.9.2"
+__version__ = "0.9.3"
 DEFAULT_JOBS = 4
 DEFAULT_REENCODE_MIN_BITRATE = 192   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
 
@@ -391,27 +391,52 @@ def transcode(src: Path, dst: Path, bitrate: int, tuning: str,
     return True, None
 
 
+def _write_tmp_image(data: bytes):
+    """Schreibt Bild-Bytes in eine temporäre Datei mit passender Endung."""
+    if data.startswith(b"\x89PNG"):
+        ext = "png"
+    elif data[:3] == b"GIF":
+        ext = "gif"
+    else:
+        ext = "jpg"
+    fd, name = tempfile.mkstemp(suffix="." + ext)
+    os.write(fd, data)
+    os.close(fd)
+    return Path(name)
+
+
 def extract_cover_ffmpeg(src: Path):
     """Extrahiert ein eingebettetes Cover aus einer verlustbehafteten Quelle in
-    eine temporäre JPEG-Datei (oder None). Pfad muss vom Aufrufer entfernt werden."""
+    eine temporäre Datei (oder None). Pfad muss vom Aufrufer entfernt werden.
+
+    Bevorzugt wird der Bildstream UNVERÄNDERT kopiert (kein Encoder nötig, kein
+    Qualitätsverlust). Nur falls das scheitert, wird nach JPEG re-encodiert."""
+    # 1) Bildstream 1:1 kopieren (robust gegen minimale ffmpeg-Builds)
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(src), "-an",
+             "-map", "0:v:0", "-c", "copy", "-f", "image2pipe", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+    if res.returncode == 0 and res.stdout:
+        return _write_tmp_image(res.stdout)
+
+    # 2) Fallback: nach JPEG re-encodieren (benötigt mjpeg-Encoder)
     fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     tmp = Path(tmp_name)
-    cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(src),
-           "-an", "-frames:v", "1", str(tmp)]
     try:
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-i", str(src),
+             "-an", "-frames:v", "1", str(tmp)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and tmp.stat().st_size > 0:
+            return tmp
     except OSError:
-        safe_unlink(tmp)
-        return None
-    try:
-        if res.returncode != 0 or tmp.stat().st_size == 0:
-            safe_unlink(tmp)
-            return None
-    except OSError:
-        safe_unlink(tmp)
-        return None
-    return tmp
+        pass
+    safe_unlink(tmp)
+    return None
 
 
 def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
