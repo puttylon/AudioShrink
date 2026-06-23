@@ -25,6 +25,7 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.7 | Lossy-Re-Encode (optional) | ✅ fertig (mit 0.6) |
 | 0.8 | Parallelisierung & Performance | ✅ fertig (Standard: 4 Jobs) |
 | 0.91 | Tests (stdlib unittest-Suite) | ✅ fertig |
+| 0.92 | Re-Encode-Politik (Bitrate-Schwelle) + Hybrid-Cleanup | ✅ fertig |
 | 0.95 | README/Doku & Härtung | offen |
 | 1.0 | Release | offen |
 
@@ -94,6 +95,21 @@ Logikfunktionen ab: `determine_bitrate`, `is_speech`, `reencode_is_sensible`,
 `build_metadata_opts`, `is_up_to_date`, `source_has_counterpart` (inkl.
 Re-Encode-Fälle) und `plan_album_cover` (mit gemockten externen Tools).
 **Ergebnis:** Regressionen werden früh erkannt.
+
+## 0.92 — Re-Encode-Politik (Bitrate-Schwelle) + Hybrid-Cleanup
+**Fokus:** Konsistente Behandlung verlustbehafteter Quellen, inkrementelles Aufräumen.
+**Neu:**
+- Re-Encode verlustbehafteter Quellen ist jetzt **Standard**; abschaltbar mit
+  `--no-reencode-lossy`. Entscheidung **nur über die Quellbitrate** (kein Genre):
+  re-encodieren, wenn Bitrate > Schwelle (`--reencode-min-bitrate`, Standard 192),
+  sonst kopieren. Die **Zielbitrate/Tuning** bleibt genre-bewusst (Speech → 64 kbps,
+  `--speech`). Dieselbe Entscheidung nutzen Lauf und Cleanup.
+- Fehlt ffmpeg, wird Re-Encode mit Warnung deaktiviert (Quellen werden kopiert).
+- **Hybrid-Cleanup:** verwaiste Dateien direkt nach jedem Ordner, verwaiste
+  Verzeichnisse + leere Ordner am Ende. Abgebrochene Läufe lassen fertige Alben
+  konsistent zurück.
+**Ergebnis:** Kein Format-Churn mehr bei konsistenter Nutzung; Hörbücher (≤192)
+werden schnell kopiert statt langsam re-encodiert.
 
 ## 0.95 — README/Doku & Härtung
 **Fokus:** Bedienbarkeit & Sonderfälle.

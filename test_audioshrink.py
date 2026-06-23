@@ -39,14 +39,31 @@ class TestIsSpeech(unittest.TestCase):
             self.assertFalse(a.is_speech(g))
 
 
-class TestReencodeSensible(unittest.TestCase):
-    def test_high_bitrate_sensible(self):
-        self.assertTrue(a.reencode_is_sensible({"sample_rate": 44100, "bitrate_kbps": 320}))
+class TestShouldReencode(unittest.TestCase):
+    def test_above_threshold(self):
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}, 192))
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 256}, 192))
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 245}, 192))
 
-    def test_low_or_equal_not_sensible(self):
-        self.assertFalse(a.reencode_is_sensible({"sample_rate": 44100, "bitrate_kbps": 64}))
-        self.assertFalse(a.reencode_is_sensible({"sample_rate": 44100, "bitrate_kbps": 100}))
-        self.assertFalse(a.reencode_is_sensible({"sample_rate": 44100, "bitrate_kbps": 0}))
+    def test_at_or_below_threshold(self):
+        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 192}, 192))
+        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128}, 192))
+        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 0}, 192))
+
+    def test_genre_irrelevant_for_decision(self):
+        # 320er Hörbuch → re-encodieren (Entscheidung nur über Bitrate) ...
+        info_high = {"sample_rate": 44100, "bitrate_kbps": 320, "genre": "Hörbuch"}
+        self.assertTrue(a.should_reencode(info_high, 192))
+        # ... aber die ZIELbitrate bleibt genre-abhängig (Speech → 64)
+        self.assertEqual(a.determine_bitrate(info_high), 64)
+        # 128er Hörbuch → kopieren
+        self.assertFalse(
+            a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128, "genre": "Hörbuch"}, 192))
+
+    def test_default_and_custom_threshold(self):
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}))
+        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}))
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}, 128))
 
 
 class TestBuildMetadataOpts(unittest.TestCase):
@@ -224,6 +241,69 @@ class TestPlanAlbumCover(unittest.TestCase):
             plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")])
         self.assertFalse(plan["discard_embedded"])
         self.assertIsNone(plan["write_cover"])
+
+
+class TestCleanupDirFiles(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.source = root / "src"
+        self.target = root / "dst"
+        (self.source / "Album").mkdir(parents=True)
+        (self.target / "Album").mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_removes_orphan_keeps_valid_and_cover(self):
+        (self.source / "Album" / "t.flac").write_bytes(b"x")        # -> t.opus gültig
+        (self.target / "Album" / "t.opus").write_bytes(b"x")
+        (self.target / "Album" / "orphan.lrc").write_bytes(b"x")    # ohne Quelle
+        (self.target / "Album" / "cover.jpg").write_bytes(b"x")     # generiertes Cover
+        removed = a.cleanup_dir_files(
+            self.source, self.target, self.source / "Album",
+            dry_run=False, dedup_covers=True, reencode_lossy=False,
+            reencode_min_bitrate=192)
+        self.assertEqual(removed, 1)
+        self.assertTrue((self.target / "Album" / "t.opus").exists())
+        self.assertTrue((self.target / "Album" / "cover.jpg").exists())  # geschützt
+        self.assertFalse((self.target / "Album" / "orphan.lrc").exists())
+
+    def test_dry_run_reports_but_keeps(self):
+        (self.target / "Album" / "orphan.lrc").write_bytes(b"x")
+        removed = a.cleanup_dir_files(
+            self.source, self.target, self.source / "Album",
+            dry_run=True, dedup_covers=True, reencode_lossy=False,
+            reencode_min_bitrate=192)
+        self.assertEqual(removed, 1)
+        self.assertTrue((self.target / "Album" / "orphan.lrc").exists())
+
+
+class TestCleanupDirs(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.source = root / "src"
+        self.target = root / "dst"
+        self.source.mkdir()
+        self.target.mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_removes_orphan_dir_and_empty_dir(self):
+        (self.source / "Keep").mkdir()
+        (self.target / "Keep").mkdir()
+        (self.target / "Keep" / "x.opus").write_bytes(b"x")
+        (self.target / "Gone").mkdir()                       # keine Quelle → weg
+        (self.target / "Gone" / "y.opus").write_bytes(b"x")
+        (self.source / "Empty").mkdir()                      # Quelle leer
+        (self.target / "Empty").mkdir()                      # Ziel leer → weg
+        removed = a.cleanup_dirs(self.source, self.target, dry_run=False)
+        self.assertTrue((self.target / "Keep").is_dir())
+        self.assertFalse((self.target / "Gone").exists())
+        self.assertFalse((self.target / "Empty").exists())
+        self.assertEqual(removed, 2)
 
 
 if __name__ == "__main__":
