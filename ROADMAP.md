@@ -20,7 +20,7 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.2 | Inkrementell & robust | ✅ fertig |
 | 0.3 | Intelligente Bitrate | ✅ fertig |
 | 0.4 | Spiegel-Bereinigung (Cleanup) | ✅ fertig |
-| 0.5 | Album-Cover-Deduplizierung | offen |
+| 0.5 | Album-Cover-Deduplizierung | ✅ fertig |
 | 0.6 | Cover-Optimierung & -Entfernung | offen |
 | 0.7 | Lossy-Re-Encode (optional) | offen |
 | 0.8 | Parallelisierung & Performance | offen |
