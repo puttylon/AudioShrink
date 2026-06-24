@@ -27,7 +27,7 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.91 | Tests (stdlib unittest-Suite) | ✅ fertig |
 | 0.92 | Re-Encode-Politik (Bitrate-Schwelle) + Hybrid-Cleanup | ✅ fertig |
 | 0.95 | README/Doku & Härtung | ✅ fertig |
-| 1.0 | Release | offen |
+| 1.0 | Release | ✅ fertig |
 
 (Die in 0.9x erwogene „Ziel-Whitelist" wurde verworfen: Der strikte Spiegel ist
 gewollt – Begleitdateien bleiben, solange sie in der Quelle liegen; nur quell-lose
@@ -121,8 +121,11 @@ ist überwiegend durch die realen NAS-Bugfixes (0.9.x) erfolgt.
 **Offen/optional:** `--ext opus/ogg` (bei Bedarf).
 **Ergebnis:** Dokumentiert und im Alltag erprobt.
 
-## 1.0 — Release
+## 1.0 — Release ✅
 **Fokus:** Stabil & verteilbar.
-**Neu:** Stabile CLI, `--version`, Packaging (Single-File-Skript oder `pyproject`),
-Abschluss-Review, Changelog.
+**Erledigt:** Stabile CLI mit `--version`, [CHANGELOG.md](CHANGELOG.md) aus der
+0.x-Historie, Abschluss-Review (kompiliert sauber, Tests grün), Git-Tag `v1.0.0`.
+Verteilung: `audioshrink.py` (+ optional `fix_covers.py`) in ein Verzeichnis im
+`PATH` bzw. nach `/volume1/public/` kopieren – keine Installation/Abhängigkeiten
+über die Standardbibliothek hinaus.
 **Ergebnis:** Produktiv einsetzbar.

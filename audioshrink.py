@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AudioShrink – verkleinert Musiksammlungen nach Opus.
 
-Version 0.9.6 (Re-Encode-Politik, Hybrid-Cleanup, Cover-Dedup auch für Lossy):
+Version 1.0 (erste stabile Version):
   - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET (ordnerweise).
   - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
     aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
@@ -41,7 +41,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.9.7"
+__version__ = "1.0.0"
 DEFAULT_JOBS = 2    # Kerne für andere NAS-Aufgaben frei lassen
 DEFAULT_COMP = 6    # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
 DEFAULT_REENCODE_MIN_BITRATE = 320   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
