@@ -1,135 +1,131 @@
 # AudioShrink
 
-Verkleinert eine große, gemischte Musiksammlung in eine kompakte, einheitlich
-formatierte **Opus**-Spiegelkopie – ideal für Smartphone, Tablet oder Player.
+Compresses a large, mixed music collection into a compact, uniformly
+formatted **Opus** mirror copy – ideal for smartphone, tablet, or player.
 
-- Verlustfreie Quellen (FLAC, WAV, AIFF) → Opus transkodiert.
-- Verlustbehaftete Quellen (MP3, AAC, …) → kopiert; nur hochbitratige werden
-  re-encodiert (Schwelle einstellbar).
-- Die Verzeichnisstruktur wird **exakt gespiegelt**; der Lauf ist **wiederholbar**
-  (nur Neues/Geändertes wird verarbeitet).
+- Lossless sources (FLAC, WAV, AIFF) → transcoded to Opus.
+- Lossy sources (MP3, AAC, …) → copied; only high-bitrate ones are
+  re-encoded (threshold adjustable).
+- The directory structure is **mirrored exactly**; the run is **repeatable**
+  (only new/changed files are processed).
 
-Design und Hintergrund: siehe [CONCEPT.md](CONCEPT.md).
+Design and background: see [CONCEPT.md](CONCEPT.md).
 
 ---
 
-## Voraussetzungen
+## Requirements
 
-Externe Werkzeuge müssen im `PATH` liegen (Installation systemabhängig):
+External tools must be in `PATH` (installation is system-dependent):
 
-| Werkzeug | Pflicht? | Wofür |
+| Tool | Required? | Purpose |
 |---|---|---|
-| `opusenc` (opus-tools) | **ja** | Einziger Encoder (alles → Opus) |
-| `ffprobe` (ffmpeg)     | **ja** | Audio-Analyse (Samplerate, Bitrate, Tags) |
-| `ffmpeg`               | nur bei `--reencode-lossy` (Standard an) | Dekodiert Lossy-Quellen + extrahiert Cover. Fehlt es, wird Re-Encode mit Warnung deaktiviert. |
-| `metaflac` (flac)      | optional | Cover-Extraktion aus FLAC für die Deduplizierung |
-| ImageMagick (`magick`/`convert`) | nur bei `--cover-max-size` | Cover verkleinern |
+| `opusenc` (opus-tools) | **yes** | Only encoder (everything → Opus) |
+| `ffprobe` (ffmpeg)     | **yes** | Audio analysis (sample rate, bitrate, tags) |
+| `ffmpeg`               | only with `--reencode-lossy` (default on) | Decodes lossy sources + extracts covers. If missing, re-encode is disabled with a warning. |
+| `metaflac` (flac)      | optional | Cover extraction from FLAC for deduplication |
+| ImageMagick (`magick`/`convert`) | only with `--cover-max-size` | Resize covers |
 
-Python **3.8+** (nur Standardbibliothek, keine pip-Pakete).
+Python **3.8+** (standard library only, no pip packages).
 
 ---
 
-## Aufruf
+## Usage
 
 ```sh
-audioshrink.py QUELLE ZIEL [Optionen]
+audioshrink.py SOURCE TARGET [Options]
 ```
 
-Beispiel (entspricht den aktuellen Standardwerten):
+Example (corresponds to current defaults):
 ```sh
 ./audioshrink.py /volume1/music/musik /volume1/music/musik_ogg
 # = --jobs 2 --comp 6 --reencode-min-bitrate 320
 ```
 
-### Optionen
+### Options
 
-| Option | Default | Bedeutung |
+| Option | Default | Meaning |
 |---|---|---|
-| `--jobs N` | `2` | Parallele Konvertierungen (Kerne für andere NAS-Aufgaben frei lassen). |
-| `--comp 0..10` | `6` | opusenc-Komplexität (10 = beste/langsamste, kleiner = schneller). |
-| `--reencode-min-bitrate KBPS` | `320` | Verlustbehaftete Quellen **über** dieser Bitrate werden re-encodiert, darunter kopiert. |
-| `--no-reencode-lossy` | – | Verlustbehaftete Quellen **immer** kopieren (kein Re-Encode). |
-| `--no-cover-dedup` | – | Album-Cover **nicht** deduplizieren (eingebettete Cover bleiben je Datei). |
-| `--cover-max-size PX` | – | Cover auf max. Kantenlänge verkleinern (ImageMagick). |
-| `--strip-covers` | – | Cover/Bilder vollständig entfernen. |
-| `--no-cleanup` | – | Verwaiste Ziel-Dateien/-Ordner **nicht** löschen. |
-| `--dry-run` | – | Alle Aktionen (inkl. Löschungen) nur anzeigen, nichts ausführen. |
-| `--force` | – | Alles neu verarbeiten (Aktualitätsprüfung ignorieren). |
-| `--debug` | – | Ausführliche Ausgabe (zeigt u. a. übersprungene Dateien). |
-| `--version` | – | Version ausgeben. |
+| `--jobs N` | `2` | Parallel conversions (leave cores for other NAS tasks). |
+| `--comp 0..10` | `6` | opusenc complexity (10 = best/slowest, lower = faster). |
+| `--reencode-min-bitrate KBPS` | `320` | Lossy sources **above** this bitrate are re-encoded; below are copied. |
+| `--no-reencode-lossy` | – | Always copy lossy sources (no re-encode). |
+| `--no-cover-dedup` | – | Do **not** deduplicate album covers (embedded covers remain per file). |
+| `--cover-max-size PX` | – | Resize covers to max dimension (ImageMagick). |
+| `--strip-covers` | – | Remove covers/images completely. |
+| `--no-cleanup` | – | Do **not** delete orphaned target files/folders. |
+| `--dry-run` | – | Show all actions (including deletions) without executing. |
+| `--force` | – | Reprocess everything (ignore freshness check). |
+| `--debug` | – | Verbose output (shows skipped files, etc.). |
+| `--version` | – | Print version. |
 
 ---
 
-## Wie entschieden wird
+## Decision Logic
 
-**Pro Datei:**
+**Per file:**
 
-| Quelle | Aktion |
+| Source | Action |
 |---|---|
-| FLAC / WAV / AIFF | → Opus transkodieren |
-| MP3 / AAC / M4A / WMA / OGG / Opus | Bitrate **> Schwelle** → Re-Encode nach Opus; sonst **kopieren** |
-| Bilder (jpg/png/…) | kopieren; optional verkleinern (`--cover-max-size`) oder entfernen (`--strip-covers`) |
-| alles andere | kopieren |
+| FLAC / WAV / AIFF | → Transcode to Opus |
+| MP3 / AAC / M4A / WMA / OGG / Opus | Bitrate **> threshold** → Re-encode to Opus; otherwise **copy** |
+| Images (jpg/png/…) | Copy; optionally resize (`--cover-max-size`) or remove (`--strip-covers`) |
+| Everything else | Copy |
 
-**Zielbitrate (beim Encoden):** aus der Samplerate – ≥ 96 kHz → 160, ≥ 48 kHz → 128,
-sonst 96 kbps; bei Sprach-Genres (Hörbuch/Podcast/…) auf **64 kbps + `--speech`**.
-Nie höher als die Quellbitrate.
+**Target bitrate (when encoding):** derived from sample rate – ≥ 96 kHz → 160, ≥ 48 kHz → 128,
+otherwise 96 kbps; for speech genres (audiobook/podcast/…) → **64 kbps + `--speech`**.
+Never higher than the source bitrate.
 
-> Wichtig: Die **Re-Encode-Entscheidung** hängt **nur an der Bitrate** (kein Genre).
-> Ein 320er-Hörbuch wird also re-encodiert (zu 64 kbps Opus), ein 128er kopiert.
+> Important: The **re-encode decision** depends **only on bitrate** (not genre).
+> A 320k audiobook will thus be re-encoded (to 64 kbps Opus), a 128k one copied.
 
-**Album-Cover-Deduplizierung (Standard an):** Haben alle transkodierten Tracks eines
-Ordners dasselbe eingebettete Cover (oder liegt eine `cover.jpg`/`folder.jpg` vor),
-wird **ein** `cover.jpg`/`.png` im Ordner abgelegt und das Bild aus den Opus-Dateien
-entfernt. Unterschiedliche Cover bleiben je Track erhalten.
+**Album cover deduplication (default on):** If all transcoded tracks in a folder have the same 
+embedded cover (or a `cover.jpg`/`folder.jpg` exists), a single `cover.jpg`/`.png` is placed 
+in the folder and the image removed from the Opus files. Different covers remain per track.
 
-**Aufräumen (Spiegel, Standard an):** Was im Ziel keine Entsprechung in der Quelle
-hat, wird entfernt – Audiodateien im falschen Format (z. B. ein `.opus`, das nun als
-`.mp3` kopiert würde) sowie Dateien/Ordner ohne Quelle. Bereits vorhandene
-Begleitdateien (`.lrc`, Cover …) bleiben, solange sie in der Quelle existieren.
-Das Aufräumen erfolgt **hybrid**: verwaiste Dateien direkt nach jedem Ordner,
-verwaiste Verzeichnisse + leere Ordner am Ende. Ein abgebrochener Lauf hinterlässt
-fertige Alben konsistent.
+**Cleanup (mirroring, default on):** Anything in the target without a source counterpart is removed 
+– audio files in the wrong format (e.g. a `.opus` that would now be copied as `.mp3`) and files/folders 
+with no source. Existing companion files (`.lrc`, covers, …) remain as long as they exist in the source. 
+Cleanup is **hybrid**: orphaned files removed immediately after each folder, orphaned directories + 
+empty folders at the end. An interrupted run leaves completed albums consistent.
 
-**Inkrementell:** Aktuelle Ziele (gleiche mtime, bei Kopien zusätzlich Größe) werden
-übersprungen. Der Lauf ist damit **fortsetzbar** – nach Abbruch einfach erneut starten.
-`--force` erzwingt Neuverarbeitung.
+**Incremental:** Current targets (same mtime, for copies also size) are skipped. Runs are thus 
+**resumable** – after a break, just run again.
+`--force` forces reprocessing.
 
 ---
 
-## Exit-Codes
+## Exit Codes
 
-| Code | Bedeutung |
+| Code | Meaning |
 |---|---|
-| 0 | Erfolgreich, keine Fehler |
-| 1 | Start-/Konfigurationsfehler (Parameter, fehlende Abhängigkeit, Quelle) |
-| 2 | Lauf beendet, aber einzelne Dateien fehlerhaft |
+| 0 | Success, no errors |
+| 1 | Startup/configuration error (parameters, missing dependency, source) |
+| 2 | Run completed, but some files had errors |
 
 ---
 
-## Hilfsskript: fix_covers.py
+## Helper Script: fix_covers.py
 
-Findet im Ziel Album-Ordner, die `.opus` enthalten, aber **gar kein** Cover haben
-(weder `cover.jpg` noch eingebettet – Altbestand früherer Versionen), und erzeugt
-sie gezielt mit `audioshrink --force` neu. Den Quellordner leitet es aus dem Zielpfad
-ab (Endung `_ogg` der Wurzel entfernen, z. B. `…/musik_ogg` → `…/musik`).
+Finds album folders in the target that contain `.opus` files but **have no** cover at all
+(neither `cover.jpg` nor embedded – legacy from earlier versions), and regenerates them 
+with `audioshrink --force`. It derives the source folder from the target path (removes 
+`_ogg` suffix from root, e.g. `…/musik_ogg` → `…/musik`).
 
 ```sh
-./fix_covers.py /volume1/music/musik_ogg            # nur auflisten (sicher)
-./fix_covers.py /volume1/music/musik_ogg --apply    # tatsächlich neu erzeugen
-./fix_covers.py /volume1/music/musik_ogg --source-root /pfad/zur/quelle --apply
+./fix_covers.py /volume1/music/musik_ogg            # list only (safe)
+./fix_covers.py /volume1/music/musik_ogg --apply    # actually regenerate
+./fix_covers.py /volume1/music/musik_ogg --source-root /path/to/source --apply
 ```
 
-Beide Skripte müssen im selben Ordner liegen (`fix_covers` nutzt `audioshrink` als Modul).
+Both scripts must be in the same directory (`fix_covers` uses `audioshrink` as a module).
 
 ---
 
-## Hinweise
+## Notes
 
-- **NAS:** getestet auf Synology DS718plus (Python 3.8). `--jobs 2` lässt Kerne frei;
-  für einen ungestörten Lauf kann `--jobs 4` schneller sein.
-- **Erst gefahrlos prüfen:** `--dry-run` zeigt vollständig, was kopiert/konvertiert
-  **und gelöscht** würde, ohne etwas anzufassen.
-- **Rechte:** Das Programm schreibt als der ausführende Benutzer; gehören vorhandene
-  Zieldateien einem anderen Benutzer, scheitert das Überschreiben (wird je Datei als
-  Fehler protokolliert, der Lauf läuft weiter).
+- **NAS:** tested on Synology DS718plus (Python 3.8). `--jobs 2` leaves cores free;
+  for an uninterrupted run, `--jobs 4` can be faster.
+- **Check safely first:** `--dry-run` shows completely what would be copied/converted
+  **and deleted**, without touching anything.
+- **Permissions:** The program runs as the executing user; if existing target files
+  are owned by another user, overwriting will fail (logged per file, run continues).
