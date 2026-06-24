@@ -20,25 +20,39 @@ External tools must be in `PATH` (installation is system-dependent):
 | Tool | Required? | Purpose |
 |---|---|---|
 | `opusenc` (opus-tools) | **yes** | Only encoder (everything → Opus) |
-| `ffprobe` (ffmpeg)     | **yes** | Audio analysis (sample rate, bitrate, tags) |
 | `ffmpeg`               | only with `--reencode-lossy` (default on) | Decodes lossy sources + extracts covers. If missing, re-encode is disabled with a warning. |
 | `metaflac` (flac)      | optional | Cover extraction from FLAC for deduplication |
 | ImageMagick (`magick`/`convert`) | only with `--cover-max-size` | Resize covers |
 
-Python **3.8+** (standard library only, no pip packages).
+**Python Requirements:**
+Python **3.8+** and the `mutagen` library for fast metadata parsing.
+
+## Installation (NAS / Homebrew)
+
+Modern Python environments restrict global pip installations (PEP 668). The cleanest way is to install the external binaries via Homebrew, and use a virtual environment for the Python package:
+
+```sh
+# 1. Install required system dependencies via Homebrew
+brew install opus-tools ffmpeg flac imagemagick
+
+# 2. Create a virtual environment (e.g., in your home directory)
+python3 -m venv ~/audioshrink-env
+
+# 3. Install the required Python package inside the environment
+~/audioshrink-env/bin/pip install mutagen
 
 ---
 
 ## Usage
 
 ```sh
-audioshrink.py SOURCE TARGET [Options]
+~/audioshrink-env/bin/python audioshrink.py SOURCE TARGET [Options]
 ```
 
 Example (corresponds to current defaults):
 ```sh
-./audioshrink.py /volume1/music/musik /volume1/music/musik_ogg
-# = --jobs 2 --comp 6 --reencode-min-bitrate 320
+~/audioshrink-env/bin/python audioshrink.py /volume1/music/musik /volume1/music/musik_ogg
+# = --jobs max_cores-1 --comp 6 --reencode-min-bitrate 320
 ```
 
 ### Options

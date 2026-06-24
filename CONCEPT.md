@@ -21,7 +21,7 @@ without audible quality loss.
 
 | Principle | Commitment |
 |---|---|
-| Portability | Runs on any Linux system, shell-independent. Python-3 **standard library only** (minimum version **3.8**), no pip packages. |
+| Portability | Runs on any Linux system, shell-independent. Minimum Python version **3.8**. Minimal dependencies (only `mutagen` via pip) to avoid process-spawning bottlenecks. |
 | Encoder discipline | **opusenc is the only encoder.** ffmpeg is never used for encoding. |
 | Mirror invariant | The relative target structure is always identical to the source. |
 | Idempotence / Resumability | Repeated runs process only new/changed files; an interruption leaves completed albums consistent. |
@@ -36,7 +36,7 @@ without audible quality loss.
 | Encoding **all** output to Opus | **opusenc** (only encoder) |
 | Read native inputs (FLAC/WAV/AIFF) | opusenc directly (tags + covers automatically) |
 | **Decode** lossy sources for re-encode | **ffmpeg** → PCM pipe to opusenc (decoder only); tags/covers re-set via ffprobe → opusenc |
-| Audio analysis (sample rate, bitrate, tags) | **ffprobe** (read-only) |
+| Audio analysis (sample rate, bitrate, tags) | **mutagen** (Native Python library, replaces external ffprobe to drastically improve speed on large libraries) |
 | Extract covers (for dedup) | **metaflac** (FLAC) or **ffmpeg** (lossy, unchanged copy) |
 | Resize covers (optional) | **ImageMagick** |
 

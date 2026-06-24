@@ -11,6 +11,7 @@ is stacked on a working skeleton from the start.
 - **Encoder:** exclusively `opusenc`; `ffmpeg` never for encoding (lossy decoder only)
 - **0.1:** fixed bitrate 128 kbps (intelligent bitrate from 0.3 onward)
 - **Parallelization:** from 0.8 onward – including measurement of real time savings
+- **Dependencies:** Exclusively standard library up to v1.1. From v1.2 onward, `mutagen` is required to eliminate process-spawning bottlenecks for metadata reading.
 
 ## Status
 
@@ -36,6 +37,7 @@ source-less targets are removed.)
 ---
 
 ## 0.1 — Skeleton (Walking Skeleton)
+**Status:** ✅ done
 **Focus:** Complete pass-through, minimal.
 **New:** CLI (`SOURCE TARGET`), dependency check (opusenc), recursive traversal,
 mirror structure, FLAC/WAV/AIFF → Opus (fixed bitrate 128, `--vbr --music`),
@@ -44,24 +46,28 @@ everything else copy, simple logging.
 **Not yet:** skip logic, bitrate intelligence, cleanup, covers, ffprobe.
 
 ## 0.2 — Incremental & Robust
+**Status:** ✅ done
 **Focus:** Repeatable & fault-tolerant.
 **New:** Freshness check (mtime/size) → skip, `--force`, `try/except` per file,
 error counter, exit codes (0/1/2), `--debug`.
 **Result:** Second run is fast; one broken track doesn't break everything.
 
 ## 0.3 — Intelligent Bitrate
+**Status:** ✅ done
 **Focus:** Quality/size per file.
 **New:** `ffprobe` analysis (sample rate, bitrate, genre, codec), sample-rate rule
 (160/128/96), source bitrate cap, `--speech`/`--music` by genre.
 **Result:** Each file gets the right bitrate. **Deliberately no** track-length reduction.
 
 ## 0.4 — Mirror Cleanup (Cleanup)
+**Status:** ✅ done
 **Focus:** True mirror including deletions.
 **New:** `cleanup_target` (orphaned files/folders), default **on**, `--no-cleanup`,
 `--dry-run`, Opus → source extension mapping.
 **Result:** Deleted sources also disappear in target; `--dry-run` shows it safely.
 
 ## 0.5 — Album Cover Deduplication
+**Status:** ✅ done
 **Focus:** Album-level processing.
 **New:** Switch to **folder-by-folder** processing, `plan_album_cover`/
 `finalize_album_cover`, hash comparison "all tracks same cover?", `metaflac` extraction,
@@ -69,18 +75,21 @@ error counter, exit codes (0/1/2), `--debug`.
 **Result:** Covers only once per album instead of in every file – noticeable space savings.
 
 ## 0.6 — Cover Optimization & Removal
+**Status:** ✅ done
 **Focus:** Control image size.
 **New:** `--cover-max-size` (ImageMagick `magick`/`convert`, `-resize 'NxN>' -strip -quality`),
 `COVER_QUALITY`, `--strip-covers`.
 **Result:** Covers are resized or removed entirely.
 
 ## 0.7 — Lossy Re-Encode (Optional)
+**Status:** ✅ done
 **Focus:** The most complex path.
 **New:** `--reencode-lossy`, `reencode_is_sensible`, ffmpeg-**decoder** → pipe → opusenc,
 tag/cover rebuild via ffprobe → opusenc options.
 **Result:** Large MP3/AAC can also be compressed – lossless metadata, ffmpeg as decoder only.
 
 ## 0.8 — Parallelization & Performance
+**Status:** ✅ done
 **Focus:** Suitable for 300–500 GB.
 **New:** Encoding across multiple CPU cores (worker pool), `--jobs N` (**default 4**,
 suitable for DS718plus), ordered log output, progress reporting. **Measurement** of
@@ -88,6 +97,7 @@ whether parallelization actually saves time.
 **Result:** Large collections in reasonable time.
 
 ## 0.91 — Tests (Stdlib unittest Suite)
+**Status:** ✅ done
 **Focus:** Secure logic without extra packages.
 **New:** `test_audioshrink.py` with `unittest` (no pytest → runs via
 `python3 -m unittest` everywhere, even on DS718plus). Covers pure logic functions:
@@ -97,6 +107,7 @@ whether parallelization actually saves time.
 **Result:** Regressions detected early.
 
 ## 0.92 — Re-Encode Policy (Bitrate Threshold) + Hybrid Cleanup
+**Status:** ✅ done
 **Focus:** Consistent treatment of lossy sources, incremental cleanup.
 **New:**
 - Re-encode of lossy sources now **default**; disable with `--no-reencode-lossy`.
@@ -110,6 +121,7 @@ whether parallelization actually saves time.
 slow re-encoding.
 
 ## 0.95 — README/Docs & Hardening
+**Status:** ✅ done
 **Focus:** Usability & documentation.
 **Done:** README.md (user guide with all options/defaults), CONCEPT.md streamlined
 to lean design/architecture doc (no version-synced pseudocode; code is source of truth).
@@ -117,7 +129,8 @@ Hardening mostly via real NAS bugfixes (0.9.x).
 **Open/optional:** `--ext opus/ogg` (if needed).
 **Result:** Documented and production-tested.
 
-## 1.0 — Release ✅
+## 1.0 — Release 
+**Status:** ✅ done
 **Focus:** Stable & distributable.
 **Done:** Stable CLI with `--version`, [CHANGELOG.md](CHANGELOG.md) from 0.x history,
 final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
@@ -125,15 +138,15 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 `/volume1/public/` – no installation/dependencies beyond standard library.
 **Result:** Production-ready.
 
-## 1.1 — Quick Wins & Hardware Detection✅
+## 1.1 — Quick Wins & Hardware Detection
+**Status:** ✅ done
 **Focus:** Fixes and dynamic resource allocation.
-**New:**
 - Bitrate threshold (`--reencode-min-bitrate`) now applies inclusively (e.g., `>= 320 kbps`).
 - `--jobs` defaults to all available CPU cores minus 1 (`os.cpu_count() - 1`) to maximize utilization without freezing the system.
 **Result:** 320 kbps MP3s are reliably shrunk; out-of-the-box performance improvement on multi-core systems.
 
-## 1.2 — Performance Leap (Planned)
+## 1.2 — Performance Leap
+**Status:** ✅ done
 **Focus:** Eliminating process startup overhead for large libraries.
-**New:** Replace `ffprobe` with the native Python library `mutagen` for reading metadata.
-**Result:** Massive time savings for libraries with >10,000 tracks by avoiding external process spawning per file (requires dropping the "no pip packages" rule).
-
+**New:** Replaced `ffprobe` with the native Python library `mutagen` for reading metadata. Requires a one-time `pip install mutagen` (best done via a virtual environment).
+**Result:** Massive time savings for libraries with >10,000 tracks by avoiding external process spawning per file.

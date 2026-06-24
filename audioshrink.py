@@ -31,6 +31,7 @@ import argparse
 import hashlib
 import json
 import logging
+import mutagen
 import os
 import platform
 import shutil
@@ -40,7 +41,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 # determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
 DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
@@ -77,11 +78,11 @@ log = logging.getLogger("audioshrink")
 # --- Helper Functions --------------------------------------------------------
 def check_dependencies() -> bool:
     ok = True
-    for tool in ("opusenc", "ffprobe"):
+    for tool in ["opusenc"]:
         if shutil.which(tool) is None:
             log.error("Required dependency missing: %s", tool)
             ok = False
-    return ok
+    return ok    
 
 
 def im_cmd():
@@ -153,50 +154,50 @@ def copy_source_mtime(src: Path, dst: Path) -> None:
 
 # --- Audio Analysis & Bitrate Selection -----------------------------------
 def analyze_audio(path: Path) -> dict:
-    """Read sample rate, source bitrate, and all tags via ffprobe.
+    """Read sample rate, source bitrate, and tags via mutagen directly in Python.
     On error, return defaults so conversion still proceeds."""
     info = {"sample_rate": 0, "bitrate_kbps": 0, "genre": "", "tags": {}}
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-select_streams", "a:0",
-        "-show_entries",
-        "stream=sample_rate,bit_rate:stream_tags:format=bit_rate:format_tags",
-        "-of", "json",
-        str(path),
-    ]
     try:
-        result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        if result.returncode != 0:
-            log.warning("ffprobe analysis failed: %s", path)
+        audio = mutagen.File(path, easy=True)
+        if audio is None:
             return info
-        data = json.loads(result.stdout or "{}")
-    except (OSError, ValueError) as exc:
-        log.warning("ffprobe analysis failed: %s (%s)", path, exc)
-        return info
 
-    fmt = data.get("format", {})
-    stream = (data.get("streams") or [{}])[0]
+        # Audio-Eigenschaften (Abtastrate und Bitrate)
+        if hasattr(audio, 'info'):
+            if getattr(audio.info, 'sample_rate', None):
+                info["sample_rate"] = int(audio.info.sample_rate)
+            if getattr(audio.info, 'bitrate', None) and audio.info.bitrate > 0:
+                info["bitrate_kbps"] = int(audio.info.bitrate) // 1000
 
-    sr = stream.get("sample_rate")
-    if sr and sr != "N/A":
-        info["sample_rate"] = int(sr)
+        # Metadaten (Tags) auslesen und vereinheitlichen
+        tags = {}
+        if getattr(audio, 'tags', None):
+            for key, val in audio.tags.items():
+                # mutagen liefert Werte oft als Listen (z.B. ['Rock'])
+                if isinstance(val, list) and len(val) > 0:
+                    str_val = str(val[0])
+                else:
+                    str_val = str(val)
+                
+                clean_key = key.lower()
+                
+                # Fallback für M4A/AAC, falls easy=True Apple-Tags nicht umwandelt
+                if clean_key == '©gen': clean_key = 'genre'
+                elif clean_key == '©nam': clean_key = 'title'
+                elif clean_key == '©art': clean_key = 'artist'
+                elif clean_key == '©alb': clean_key = 'album'
+                elif clean_key == '©day': clean_key = 'date'
+                elif clean_key == 'trkn': clean_key = 'tracknumber'
+                
+                tags[clean_key] = str_val
 
-    br = stream.get("bit_rate") or fmt.get("bit_rate")
-    if br and br != "N/A":
-        info["bitrate_kbps"] = int(br) // 1000
+        info["tags"] = tags
+        info["genre"] = tags.get("genre", "")
 
-    tags = {}
-    for source_tags in (fmt.get("tags"), stream.get("tags")):
-        if source_tags:
-            for k, v in source_tags.items():
-                tags[k.lower()] = v
-    info["tags"] = tags
-    info["genre"] = tags.get("genre", "")
+    except Exception as exc:
+        log.warning("mutagen analysis failed: %s (%s)", path, exc)
 
     return info
-
 
 def is_speech(genre: str) -> bool:
     g = (genre or "").lower()
