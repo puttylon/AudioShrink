@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""fix_covers – findet Ziel-Album-Ordner OHNE Cover und lässt audioshrink sie
-mit --force neu erzeugen.
+"""fix_covers – finds target album folders WITHOUT covers and has audioshrink
+recreate them with --force.
 
-„Ohne Cover" = der Ordner enthält .opus-Dateien, aber WEDER eine
-cover.jpg/folder.jpg-Datei NOCH ein in die Opus-Dateien eingebettetes Bild.
-Solche Ordner stammen aus früheren AudioShrink-Läufen (vor der Cover-
-Deduplizierung für Lossy bzw. mit einem ffmpeg ohne mjpeg-Encoder).
+"Without cover" = the folder contains .opus files, but NEITHER a
+cover.jpg/folder.jpg file NOR an image embedded in the Opus files.
+Such folders originate from earlier AudioShrink runs (before cover
+deduplication for lossy formats or with an ffmpeg lacking an mjpeg encoder).
 
-Der zugehörige Quellordner wird aus dem Zielpfad abgeleitet, indem im
-Wurzelverzeichnis die Endung „_ogg" entfernt wird (…/musik_ogg -> …/musik).
-Mit --source-root lässt sich die Quelle auch explizit angeben.
+The corresponding source folder is derived from the target path by removing
+the "_ogg" suffix in the root directory (…/musik_ogg -> …/musik).
+The source can also be specified explicitly with --source-root.
 
-Aufruf:
-  python3 fix_covers.py ZIEL_WURZEL                  # nur auflisten (sicher)
-  python3 fix_covers.py ZIEL_WURZEL --apply          # tatsächlich neu erzeugen
-  python3 fix_covers.py ZIEL_WURZEL --source-root /pfad/zur/quelle --apply
+Usage:
+  python3 fix_covers.py TARGET_ROOT                  # only list (safe)
+  python3 fix_covers.py TARGET_ROOT --apply          # actually recreate
+  python3 fix_covers.py TARGET_ROOT --source-root /path/to/source --apply
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import audioshrink as a
 
 
 def opus_has_embedded_cover(path: Path) -> bool:
-    """True, wenn die Opus-Datei einen Bild-(Video-)Stream enthält."""
+    """True if the Opus file contains an image (video) stream."""
     try:
         res = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v",
@@ -44,7 +44,7 @@ def dir_has_cover_file(dir_path: Path) -> bool:
 
 
 def find_coverless_albums(target_root: Path):
-    """Liefert Ziel-Ordner mit .opus, aber ohne Cover (weder Datei noch eingebettet)."""
+    """Yields target folders with .opus, but without cover (neither file nor embedded)."""
     for root, dirs, files in os.walk(target_root):
         dirs[:] = [d for d in sorted(dirs)
                    if d not in a.IGNORE_DIRS and not d.startswith(".")]
@@ -54,7 +54,7 @@ def find_coverless_albums(target_root: Path):
             continue
         if dir_has_cover_file(root_path):
             continue
-        # Innerhalb eines Albums werden alle Tracks gleich behandelt -> erstes prüfen
+        # Within an album, all tracks are treated equally -> check the first one
         if opus_has_embedded_cover(root_path / opus_files[0]):
             continue
         yield root_path
@@ -64,53 +64,53 @@ def default_source_root(target_root: Path) -> Path:
     name = target_root.name
     if name.endswith("_ogg"):
         return target_root.parent / name[:-4]
-    return target_root  # keine sinnvolle Ableitung möglich
+    return target_root  # no meaningful derivation possible
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="fix_covers",
-        description="Findet Ziel-Album-Ordner ohne Cover und erzeugt sie mit "
-                    "audioshrink --force neu.")
-    parser.add_argument("target_root", help="Ziel-Wurzelverzeichnis (z. B. …/musik_ogg)")
+        description="Finds target album folders without covers and recreates "
+                    "them with audioshrink --force.")
+    parser.add_argument("target_root", help="Target root directory (e.g., …/musik_ogg)")
     parser.add_argument("--source-root", default=None,
-                        help="Quell-Wurzel (Default: Ziel-Wurzel ohne Endung '_ogg')")
+                        help="Source root (Default: target root without '_ogg' suffix)")
     parser.add_argument("--apply", action="store_true",
-                        help="audioshrink wirklich aufrufen (ohne: nur auflisten)")
+                        help="actually call audioshrink (without this: only list)")
     parser.add_argument("--audioshrink", default=None,
-                        help="Pfad zu audioshrink.py (Default: neben diesem Skript)")
+                        help="Path to audioshrink.py (Default: next to this script)")
     args = parser.parse_args(argv)
 
     target_root = Path(args.target_root).expanduser().resolve()
     if not target_root.is_dir():
-        print("Ziel-Wurzel nicht gefunden:", target_root)
+        print("Target root not found:", target_root)
         return 1
 
     source_root = (Path(args.source_root).expanduser().resolve()
                    if args.source_root else default_source_root(target_root))
     if not source_root.is_dir():
-        print("Quell-Wurzel nicht gefunden:", source_root)
-        print("→ mit --source-root explizit angeben.")
+        print("Source root not found:", source_root)
+        print("→ specify explicitly with --source-root.")
         return 1
 
     audioshrink_py = (Path(args.audioshrink).expanduser().resolve()
                       if args.audioshrink
                       else Path(__file__).resolve().parent / "audioshrink.py")
     if args.apply and not audioshrink_py.is_file():
-        print("audioshrink.py nicht gefunden:", audioshrink_py)
+        print("audioshrink.py not found:", audioshrink_py)
         return 1
 
-    print("Quelle:", source_root)
-    print("Ziel:  ", target_root)
-    print("Suche Album-Ordner ohne Cover ...")
+    print("Source:", source_root)
+    print("Target:", target_root)
+    print("Searching for album folders without cover...")
 
     affected = list(find_coverless_albums(target_root))
     if not affected:
-        print("Keine cover-losen Album-Ordner gefunden.")
+        print("No coverless album folders found.")
         return 0
 
     todo = []
-    print("%d Album-Ordner ohne Cover:" % len(affected))
+    print("%d album folders without cover:" % len(affected))
     for tdir in affected:
         rel = tdir.relative_to(target_root)
         sdir = source_root / rel
@@ -118,14 +118,14 @@ def main(argv=None) -> int:
             todo.append((sdir, tdir))
             print("  [ok] %s" % rel)
         else:
-            print("  [Quelle fehlt] %s" % rel)
+            print("  [source missing] %s" % rel)
 
     if not args.apply:
-        print("\nNur Auflistung (sicher). Mit --apply werden die [ok]-Ordner "
-              "via 'audioshrink --force --no-cleanup' neu erzeugt.")
+        print("\nListing only (safe). With --apply, the [ok] folders will be "
+              "recreated via 'audioshrink --force --no-cleanup'.")
         return 0
 
-    print("\nErzeuge %d Ordner neu ..." % len(todo))
+    print("\nRecreating %d folders..." % len(todo))
     errors = 0
     for sdir, tdir in todo:
         cmd = [sys.executable, str(audioshrink_py), str(sdir), str(tdir),
@@ -133,8 +133,8 @@ def main(argv=None) -> int:
         rc = subprocess.run(cmd).returncode
         if rc != 0:
             errors += 1
-            print("  Hinweis: audioshrink rc=%d bei %s" % (rc, tdir))
-    print("\nFertig. Neu erzeugt: %d, mit Hinweisen: %d" % (len(todo), errors))
+            print("  Note: audioshrink rc=%d at %s" % (rc, tdir))
+    print("\nDone. Recreated: %d, with notes: %d" % (len(todo), errors))
     return 0
 
 

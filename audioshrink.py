@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""AudioShrink – verkleinert Musiksammlungen nach Opus.
+"""AudioShrink – compresses music collections to Opus.
 
-Version 1.0 (erste stabile Version):
-  - Spiegelt die Verzeichnisstruktur von SOURCE nach TARGET (ordnerweise).
-  - FLAC/WAV/AIFF werden nach Opus transkodiert; die Bitrate wird pro Datei
-    aus Samplerate, Genre und Quellbitrate ermittelt (ffprobe).
-  - Album-Cover-Deduplizierung: gemeinsames eingebettetes Cover -> einmal
-    cover.jpg/png, in den Opus-Dateien verworfen. Abschaltbar (--no-cover-dedup).
-  - --cover-max-size verkleinert Cover (ImageMagick); --strip-covers entfernt
-    Cover/Bilder vollständig.
-  - Verlustbehaftete Quellen (MP3/AAC/...) werden standardmäßig nach Opus
-    re-encodiert, wenn ihre Bitrate über der Schwelle liegt (--reencode-min-bitrate,
-    Standard 320 kbps); darunter werden sie kopiert. Abschaltbar mit
-    --no-reencode-lossy. Die Entscheidung hängt NUR an der Quellbitrate (kein Genre);
-    die Zielbitrate/Tuning beim Encoden berücksichtigt Genre weiterhin
-    (Speech -> 64 kbps, --speech). ffmpeg dekodiert, opusenc encodiert.
-  - Bereits aktuelle Ziele werden übersprungen (mtime/Größe); --force erzwingt.
-  - Verwaiste Ziele (ohne Quelle) werden entfernt; abschaltbar mit --no-cleanup.
-    Aufräumen erfolgt hybrid: verwaiste Dateien sofort nach jedem Ordner,
-    verwaiste Verzeichnisse + leere Ordner am Ende.
-  - --dry-run zeigt alle Aktionen (inkl. Löschungen) nur an.
-  - Konvertierungen laufen parallel (--jobs N, Standard 2); Logausgabe bleibt
-    pro Album in Reihenfolge.
-  - Pro-Datei-Fehler brechen den Lauf nicht ab.
+Version 1.0 (first stable release):
+  - Mirrors directory structure from SOURCE to TARGET (folder by folder).
+  - FLAC/WAV/AIFF are transcoded to Opus; bitrate is determined per file
+    from sample rate, genre, and source bitrate (via ffprobe).
+  - Album cover deduplication: shared embedded cover → once as cover.jpg/png,
+    removed from Opus files. Disable with --no-cover-dedup.
+  - --cover-max-size resizes covers (ImageMagick); --strip-covers removes
+    covers/images completely.
+  - Lossy sources (MP3/AAC/...) are re-encoded to Opus by default if their
+    bitrate exceeds a threshold (--reencode-min-bitrate, default 320 kbps);
+    below that they are copied. Disable with --no-reencode-lossy. Decision
+    depends ONLY on source bitrate (not genre); target bitrate/tuning still
+    considers genre (speech → 64 kbps, --speech). ffmpeg decodes, opusenc encodes.
+  - Current targets are skipped (mtime/size); --force forces reprocessing.
+  - Orphaned targets (without source) are removed; disable with --no-cleanup.
+    Cleanup is hybrid: orphaned files immediately after each folder,
+    orphaned directories + empty folders at end.
+  - --dry-run shows all actions (including deletions) without executing.
+  - Conversions run in parallel (--jobs N, default 2); log output remains
+    per-album in order.
+  - Per-file errors do not break the run.
 
-Noch nicht enthalten (siehe ROADMAP.md): README/Doku, Release.
+Not yet included (see ROADMAP.md): additional features.
 """
 from __future__ import annotations
 
@@ -42,51 +41,50 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 __version__ = "1.0.0"
-DEFAULT_JOBS = 2    # Kerne für andere NAS-Aufgaben frei lassen
-DEFAULT_COMP = 6    # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
-DEFAULT_REENCODE_MIN_BITRATE = 320   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
+DEFAULT_JOBS = 2    # Leave cores for other NAS tasks
+DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
+DEFAULT_REENCODE_MIN_BITRATE = 320   # kbps; lossy sources ABOVE this are re-encoded
 
-# --- Konfiguration -----------------------------------------------------------
-LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc liest diese nativ
+# --- Configuration -----------------------------------------------------------
+LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc reads these natively
 LOSSY_FORMATS = {"mp3", "opus", "ogg", "aac", "m4a", "wma"}
 IMAGE_FORMATS = {"jpg", "jpeg", "png", "gif"}
-IGNORE_DIRS = {"@eaDir"}                             # System-/Cache-Ordner
+IGNORE_DIRS = {"@eaDir"}                             # System/cache folders
 TARGET_EXT = "opus"
-MTIME_TOLERANCE = 1                                  # s; gegen Dateisystem-Rundung
+MTIME_TOLERANCE = 1                                  # s; against filesystem rounding
 COVER_FILENAMES = {"cover.jpg", "cover.png", "folder.jpg", "folder.png"}
-COVER_QUALITY = 85                                   # JPEG-Qualität beim Verkleinern
+COVER_QUALITY = 85                                   # JPEG quality when resizing
 
-# Eine Ziel-.opus kann aus einer verlustfreien Quelle transkodiert ODER aus
-# einer vorhandenen .opus-Quelle kopiert worden sein (mit --reencode-lossy auch
-# aus anderen verlustbehafteten Quellen).
+# A target .opus can be transcoded from a lossless source OR copied from
+# an existing .opus source (or with --reencode-lossy also from other lossy sources).
 OPUS_SOURCE_CANDIDATES = LOSSLESS_FORMATS | {TARGET_EXT}
 
-# Bitratenwahl
+# Bitrate selection
 SPEECH_GENRES = {"hörbuch", "audiobook", "speech", "podcast", "spoken", "hörspiel"}
 SPEECH_BITRATE = 64
 
 DRY_VERB = {
-    "transcode": "würde konvertieren",
-    "transcode_lossy": "würde re-encodieren",
-    "cover_resize": "würde Cover verkleinern",
-    "copy": "würde kopieren",
+    "transcode": "would convert",
+    "transcode_lossy": "would re-encode",
+    "cover_resize": "would resize cover",
+    "copy": "would copy",
 }
 
 log = logging.getLogger("audioshrink")
 
 
-# --- Hilfsfunktionen ---------------------------------------------------------
+# --- Helper Functions --------------------------------------------------------
 def check_dependencies() -> bool:
     ok = True
     for tool in ("opusenc", "ffprobe"):
         if shutil.which(tool) is None:
-            log.error("Pflichtabhängigkeit fehlt: %s", tool)
+            log.error("Required dependency missing: %s", tool)
             ok = False
     return ok
 
 
 def im_cmd():
-    """Bevorzugt ImageMagick 7 (magick), sonst 6 (convert); None wenn keins da."""
+    """Prefer ImageMagick 7 (magick), else 6 (convert); None if neither."""
     for candidate in ("magick", "convert"):
         if shutil.which(candidate):
             return candidate
@@ -102,8 +100,8 @@ def is_lossless(path: Path) -> bool:
 
 
 def walk_by_directory(source: Path, target: Path):
-    """Liefert (Ordner, [Dateien]) je Quell-Ordner; ignoriert versteckte und
-    ausgeschlossene Ordner sowie das (ggf. eingebettete) Zielverzeichnis."""
+    """Yields (folder, [files]) per source folder; ignores hidden and
+    excluded folders, and the (potentially embedded) target directory."""
     for root, dirs, files in os.walk(source):
         root_path = Path(root)
         dirs[:] = sorted(
@@ -118,44 +116,44 @@ def walk_by_directory(source: Path, target: Path):
 
 
 def is_up_to_date(src: Path, dst: Path, compare_size: bool) -> bool:
-    """True, wenn das Ziel als aktuell gelten kann und übersprungen werden darf."""
+    """True if target can be considered current and skipped."""
     if not dst.exists():
         return False
     try:
         s = src.stat()
         d = dst.stat()
     except OSError:
-        return False  # im Zweifel verarbeiten
-    if s.st_mtime > d.st_mtime + MTIME_TOLERANCE:   # Quelle deutlich neuer
+        return False  # When in doubt, process
+    if s.st_mtime > d.st_mtime + MTIME_TOLERANCE:   # Source significantly newer
         return False
-    if compare_size and s.st_size != d.st_size:     # reine Kopie: zusätzlich Größe
+    if compare_size and s.st_size != d.st_size:     # Pure copy: also check size
         return False
     return True
 
 
 def safe_unlink(path: Path) -> None:
-    """Entfernt eine (unvollständige) Zieldatei. Schluckt dabei jeden Fehler,
-    damit die Aufräumlogik selbst niemals den Lauf abbricht."""
+    """Remove an (incomplete) target file. Swallows all errors
+    so cleanup logic itself never breaks the run."""
     try:
         path.unlink(missing_ok=True)
     except OSError as exc:
-        log.warning("Konnte unvollständige Datei nicht entfernen: %s (%s)", path, exc)
+        log.warning("Could not remove incomplete file: %s (%s)", path, exc)
 
 
 def copy_source_mtime(src: Path, dst: Path) -> None:
-    """Überträgt die mtime der Quelle auf das Ziel, damit die Skip-Logik
-    bei späteren Läufen konsistent greift (opusenc setzt sonst die Encode-Zeit)."""
+    """Copy source mtime to target, so skip logic works consistently
+    in later runs (opusenc otherwise sets encode time)."""
     try:
         st = src.stat()
         os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
     except OSError as exc:
-        log.warning("mtime konnte nicht gesetzt werden: %s (%s)", dst, exc)
+        log.warning("Could not set mtime: %s (%s)", dst, exc)
 
 
-# --- Audioanalyse & Bitratenwahl --------------------------------------------
+# --- Audio Analysis & Bitrate Selection -----------------------------------
 def analyze_audio(path: Path) -> dict:
-    """Liest Samplerate, Quellbitrate und alle Tags via ffprobe. Bei Fehlern
-    werden Defaults zurückgegeben, sodass die Konvertierung trotzdem läuft."""
+    """Read sample rate, source bitrate, and all tags via ffprobe.
+    On error, return defaults so conversion still proceeds."""
     info = {"sample_rate": 0, "bitrate_kbps": 0, "genre": "", "tags": {}}
     cmd = [
         "ffprobe", "-v", "error",
@@ -170,11 +168,11 @@ def analyze_audio(path: Path) -> dict:
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         if result.returncode != 0:
-            log.warning("ffprobe-Analyse fehlgeschlagen: %s", path)
+            log.warning("ffprobe analysis failed: %s", path)
             return info
         data = json.loads(result.stdout or "{}")
     except (OSError, ValueError) as exc:
-        log.warning("ffprobe-Analyse fehlgeschlagen: %s (%s)", path, exc)
+        log.warning("ffprobe analysis failed: %s (%s)", path, exc)
         return info
 
     fmt = data.get("format", {})
@@ -205,20 +203,20 @@ def is_speech(genre: str) -> bool:
 
 
 def determine_bitrate(info: dict) -> int:
-    """Bitrate aus Samplerate (Basis), Genre und Quellbitrate (Deckel)."""
+    """Bitrate from sample rate (base), genre, and source bitrate (cap)."""
     sr = info.get("sample_rate", 0)
     if sr >= 96000:
         bitrate = 160
     elif sr >= 48000:
         bitrate = 128
     else:
-        bitrate = 96  # u. a. 44,1-kHz-CD-Material
+        bitrate = 96  # e.g. 44.1 kHz CD material
 
     if is_speech(info.get("genre", "")):
         bitrate = min(bitrate, SPEECH_BITRATE)
 
     src_br = info.get("bitrate_kbps", 0)
-    if src_br > 0:                       # nie höher ansetzen als die Quelle
+    if src_br > 0:                       # never higher than source
         bitrate = min(bitrate, src_br)
 
     return bitrate
@@ -229,15 +227,15 @@ def opus_tuning(info: dict) -> str:
 
 
 def should_reencode(info: dict, min_bitrate: int = DEFAULT_REENCODE_MIN_BITRATE) -> bool:
-    """Ob eine verlustbehaftete Quelle re-encodiert wird – Entscheidung NUR anhand
-    der Quellbitrate (kein Genre): über der Schwelle und tatsächlich schrumpfend."""
+    """Whether a lossy source should be re-encoded – decision based ONLY on
+    source bitrate (not genre): above threshold and actually shrinking."""
     src_br = info.get("bitrate_kbps", 0)
     return src_br > min_bitrate and src_br > determine_bitrate(info)
 
 
 def build_metadata_opts(info: dict) -> list:
-    """opusenc-Metadatenoptionen aus den Quell-Tags (für den Lossy-Re-Encode,
-    da ffmpeg die Tags beim Dekodieren nach WAV verliert)."""
+    """opusenc metadata options from source tags (for lossy re-encode,
+    since ffmpeg loses tags when decoding to WAV)."""
     tags = info.get("tags", {})
     opts = []
     used = set()
@@ -258,9 +256,9 @@ def build_metadata_opts(info: dict) -> list:
     return opts
 
 
-# --- Album-Cover-Deduplizierung ---------------------------------------------
+# --- Album Cover Deduplication -------------------------------------------
 def embedded_cover_bytes(flac_path: Path):
-    """Exportiert das eingebettete Cover einer FLAC-Datei (oder None)."""
+    """Export embedded cover from FLAC file (or None)."""
     cmd = ["metaflac", "--export-picture-to=-", str(flac_path)]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -272,7 +270,7 @@ def embedded_cover_bytes(flac_path: Path):
 
 
 def _ffmpeg_cover_bytes(path: Path):
-    """Eingebettetes Cover via ffmpeg UNVERÄNDERT kopieren -> Bytes (oder None)."""
+    """Extract embedded cover via ffmpeg UNCHANGED → bytes (or None)."""
     try:
         res = subprocess.run(
             ["ffmpeg", "-v", "error", "-i", str(path), "-an",
@@ -284,15 +282,15 @@ def _ffmpeg_cover_bytes(path: Path):
 
 
 def embedded_cover_data(path: Path):
-    """Eingebettetes Cover als Bytes: FLAC via metaflac, sonst via ffmpeg."""
+    """Embedded cover as bytes: FLAC via metaflac, else via ffmpeg."""
     if ext_of(path) == "flac":
         return embedded_cover_bytes(path)
     return _ffmpeg_cover_bytes(path)
 
 
 def _will_transcode(f: Path, reencode_lossy: bool, reencode_min_bitrate: int) -> bool:
-    """Wird diese Datei nach Opus transkodiert? (FLAC immer; Lossy nur wenn
-    re-encodiert wird – Entscheidung über die Bitrate)."""
+    """Will this file be transcoded to Opus? (lossless always; lossy only if
+    re-encoded – decision by bitrate)."""
     if is_lossless(f):
         return True
     if ext_of(f) in LOSSY_FORMATS and reencode_lossy:
@@ -302,9 +300,9 @@ def _will_transcode(f: Path, reencode_lossy: bool, reencode_min_bitrate: int) ->
 
 def plan_album_cover(files: list, reencode_lossy: bool,
                      reencode_min_bitrate: int) -> dict:
-    """Entscheidet, ob für dieses Album ein gemeinsames Cover dedupliziert wird.
-    Betrachtet alle TRANSKODIERTEN Tracks (FLAC + re-encodete Lossy wie MP3).
-    Rückgabe: {discard_embedded: bool, write_cover: bytes|None}."""
+    """Decide whether to deduplicate a shared cover for this album.
+    Consider all TRANSCODED tracks (FLAC + re-encoded lossy like MP3).
+    Return: {discard_embedded: bool, write_cover: bytes|None}."""
     plan = {"discard_embedded": False, "write_cover": None}
 
     transcoded = [f for f in files
@@ -312,19 +310,19 @@ def plan_album_cover(files: list, reencode_lossy: bool,
     if not transcoded:
         return plan
 
-    # (a) Liegt bereits eine separate Cover-Datei in der Quelle? Dann reicht es,
-    #     das eingebettete Cover zu verwerfen – die Datei wird normal kopiert.
+    # (a) Is there already a separate cover file in the source? Then it suffices
+    #     to discard the embedded cover – the file is copied normally.
     if any(f.name.lower() in COVER_FILENAMES for f in files):
         plan["discard_embedded"] = True
         return plan
 
-    # (b) Haben alle transkodierten Tracks dasselbe eingebettete Cover?
+    # (b) Do all transcoded tracks have the same embedded cover?
     first_bytes = None
     digests = set()
     for f in transcoded:
         data = embedded_cover_data(f)
         if data is None:
-            return plan  # mind. ein Track ohne Cover → nicht deduplizieren
+            return plan  # At least one track without cover → don't deduplicate
         if first_bytes is None:
             first_bytes = data
         digests.add(hashlib.md5(data).digest())
@@ -336,7 +334,7 @@ def plan_album_cover(files: list, reencode_lossy: bool,
 
 
 def write_cover_file(dest: Path, data: bytes, cover_max_size) -> bool:
-    """Schreibt die Cover-Bytes nach dest, optional via ImageMagick verkleinert."""
+    """Write cover bytes to dest, optionally resized via ImageMagick."""
     if cover_max_size and im_cmd():
         cmd = [
             im_cmd(), "-",
@@ -348,10 +346,10 @@ def write_cover_file(dest: Path, data: bytes, cover_max_size) -> bool:
             res = subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE)
         except OSError as exc:
-            log.error("Album-Cover konnte nicht verkleinert werden: %s (%s)", dest, exc)
+            log.error("Album cover could not be resized: %s (%s)", dest, exc)
             return False
         if res.returncode != 0:
-            log.error("Album-Cover konnte nicht verkleinert werden: %s", dest)
+            log.error("Album cover could not be resized: %s", dest)
             return False
         return True
     dest.write_bytes(data)
@@ -360,8 +358,8 @@ def write_cover_file(dest: Path, data: bytes, cover_max_size) -> bool:
 
 def finalize_album_cover(src_dir: Path, source: Path, target: Path,
                          plan: dict, dry_run: bool, cover_max_size) -> int:
-    """Legt das extrahierte Album-Cover als eine Datei ab. Gibt 1 zurück, wenn
-    ein Cover geschrieben wurde (bzw. im Dry-Run gemeldet)."""
+    """Place extracted album cover as a single file. Return 1 if a cover
+    was written (or reported in dry-run)."""
     data = plan.get("write_cover")
     if not data:
         return 0
@@ -370,26 +368,26 @@ def finalize_album_cover(src_dir: Path, source: Path, target: Path,
     relname = rel / ("cover." + ext)
     cover_dest = target / relname
     if dry_run:
-        log.info("[DRY-RUN] würde Album-Cover anlegen: %s", relname)
+        log.info("[DRY-RUN] would create album cover: %s", relname)
         return 1
     try:
         cover_dest.parent.mkdir(parents=True, exist_ok=True)
         if not write_cover_file(cover_dest, data, cover_max_size):
             return 0
-        log.info("Album-Cover angelegt: %s", relname)
+        log.info("Album cover created: %s", relname)
         return 1
     except OSError as exc:
-        log.error("Album-Cover konnte nicht angelegt werden: %s (%s)", cover_dest, exc)
+        log.error("Album cover could not be created: %s (%s)", cover_dest, exc)
         return 0
 
 
-# --- Verarbeitung einzelner Dateien -----------------------------------------
+# --- Process Individual Files ------------------------------------------------
 def _opusenc_base(bitrate: int, tuning: str, discard_pictures: bool, comp: int) -> list:
     cmd = [
         "opusenc",
         "--bitrate", str(bitrate),
         "--vbr",
-        tuning,                 # --music oder --speech
+        tuning,                 # --music or --speech
         "--comp", str(comp),
         "--framesize", "20",
         "--quiet",
@@ -401,8 +399,8 @@ def _opusenc_base(bitrate: int, tuning: str, discard_pictures: bool, comp: int) 
 
 def transcode(src: Path, dst: Path, bitrate: int, tuning: str,
               discard_pictures: bool, comp: int):
-    """Verlustfreie Quelle (FLAC/WAV/AIFF) direkt mit opusenc nach Opus.
-    Rückgabe: (ok, fehlermeldung|None)."""
+    """Transcode lossless source (FLAC/WAV/AIFF) directly to Opus with opusenc.
+    Return: (ok, error_message|None)."""
     tmp_dst = dst.with_name(dst.name + ".tmp")
     cmd = _opusenc_base(bitrate, tuning, discard_pictures, comp) + [str(src), str(tmp_dst)]
     try:
@@ -411,21 +409,21 @@ def transcode(src: Path, dst: Path, bitrate: int, tuning: str,
         )
     except OSError as exc:
         safe_unlink(tmp_dst)
-        return False, "Konvertierung fehlgeschlagen: %s (%s)" % (src, exc)
+        return False, "Conversion failed: %s (%s)" % (src, exc)
     if result.returncode != 0:
         safe_unlink(tmp_dst)
-        return False, "Konvertierung fehlgeschlagen: %s\n%s" % (src, result.stderr.strip())
+        return False, "Conversion failed: %s\n%s" % (src, result.stderr.strip())
     try:
-        os.replace(tmp_dst, dst)  # atomarer Austausch
+        os.replace(tmp_dst, dst)  # atomic swap
     except OSError as exc:
         safe_unlink(tmp_dst)
-        return False, "Zieldatei konnte nicht umbenannt werden: %s (%s)" % (dst, exc)
+        return False, "Target file could not be renamed: %s (%s)" % (dst, exc)
     copy_source_mtime(src, dst)
     return True, None
 
 
 def _write_tmp_image(data: bytes):
-    """Schreibt Bild-Bytes in eine temporäre Datei mit passender Endung."""
+    """Write image bytes to temp file with appropriate extension."""
     if data.startswith(b"\x89PNG"):
         ext = "png"
     elif data[:3] == b"GIF":
@@ -439,17 +437,17 @@ def _write_tmp_image(data: bytes):
 
 
 def extract_cover_ffmpeg(src: Path):
-    """Extrahiert ein eingebettetes Cover aus einer verlustbehafteten Quelle in
-    eine temporäre Datei (oder None). Pfad muss vom Aufrufer entfernt werden.
+    """Extract embedded cover from a lossy source to a temp file (or None).
+    Caller must remove the path.
 
-    Bevorzugt wird der Bildstream UNVERÄNDERT kopiert (kein Encoder nötig, kein
-    Qualitätsverlust). Nur falls das scheitert, wird nach JPEG re-encodiert."""
-    # 1) Bildstream 1:1 kopieren (robust gegen minimale ffmpeg-Builds)
+    Prefer copying image stream UNCHANGED (no encoder needed, no quality loss).
+    Only if that fails, re-encode to JPEG."""
+    # 1) Copy image stream 1:1 (robust against minimal ffmpeg builds)
     data = _ffmpeg_cover_bytes(src)
     if data:
         return _write_tmp_image(data)
 
-    # 2) Fallback: nach JPEG re-encodieren (benötigt mjpeg-Encoder)
+    # 2) Fallback: re-encode to JPEG (requires mjpeg encoder)
     fd, tmp_name = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     tmp = Path(tmp_name)
@@ -468,9 +466,9 @@ def extract_cover_ffmpeg(src: Path):
 
 def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
                     info: dict, discard_pictures: bool, comp: int):
-    """Verlustbehaftete Quelle re-encodieren: ffmpeg dekodiert nach WAV (Pipe),
-    opusenc encodiert. Metadaten und (sofern gewünscht) Cover werden neu gesetzt.
-    Rückgabe: (ok, fehlermeldung|None)."""
+    """Re-encode lossy source: ffmpeg decodes to WAV (pipe), opusenc encodes.
+    Metadata and (if desired) covers are re-set.
+    Return: (ok, error_message|None)."""
     tmp_dst = dst.with_name(dst.name + ".tmp")
     pic_tmp = None
     pic_opts = []
@@ -496,9 +494,9 @@ def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
             ff.wait()
         ok = res.returncode == 0 and ff.returncode == 0
         if not ok:
-            err = "Re-Encode fehlgeschlagen: %s\n%s" % (src, res.stderr.strip())
+            err = "Re-encode failed: %s\n%s" % (src, res.stderr.strip())
     except OSError as exc:
-        err = "Re-Encode fehlgeschlagen: %s (%s)" % (src, exc)
+        err = "Re-encode failed: %s (%s)" % (src, exc)
     finally:
         if pic_tmp:
             safe_unlink(pic_tmp)
@@ -510,14 +508,14 @@ def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
         os.replace(tmp_dst, dst)
     except OSError as exc:
         safe_unlink(tmp_dst)
-        return False, "Zieldatei konnte nicht umbenannt werden: %s (%s)" % (dst, exc)
+        return False, "Target file could not be renamed: %s (%s)" % (dst, exc)
     copy_source_mtime(src, dst)
     return True, None
 
 
 def cover_resize_file(src: Path, dst: Path, cover_max_size: int):
-    """Kopiert ein separates Cover-Bild verkleinert (ImageMagick).
-    Rückgabe: (ok, fehlermeldung|None)."""
+    """Copy a separate cover image resized (ImageMagick).
+    Return: (ok, error_message|None)."""
     cmd = [
         im_cmd(), str(src),
         "-resize", "%dx%d>" % (cover_max_size, cover_max_size),
@@ -529,42 +527,42 @@ def cover_resize_file(src: Path, dst: Path, cover_max_size: int):
                              text=True)
     except OSError as exc:
         safe_unlink(dst)
-        return False, "Cover-Verkleinerung fehlgeschlagen: %s (%s)" % (src, exc)
+        return False, "Cover resize failed: %s (%s)" % (src, exc)
     if res.returncode != 0:
         safe_unlink(dst)
-        return False, "Cover-Verkleinerung fehlgeschlagen: %s\n%s" % (src, res.stderr.strip())
+        return False, "Cover resize failed: %s\n%s" % (src, res.stderr.strip())
     copy_source_mtime(src, dst)
     return True, None
 
 
 def copy(src: Path, dst: Path):
-    """Rückgabe: (ok, fehlermeldung|None)."""
+    """Return: (ok, error_message|None)."""
     try:
-        shutil.copy2(src, dst)  # erhält mtime bereits
+        shutil.copy2(src, dst)  # preserves mtime
         return True, None
     except OSError as exc:
         safe_unlink(dst)
-        return False, "Kopie fehlgeschlagen: %s (%s)" % (src, exc)
+        return False, "Copy failed: %s (%s)" % (src, exc)
 
 
-# --- Hauptverarbeitung -------------------------------------------------------
+# --- Main Processing --------------------------------------------------------
 def process_one(src: Path, source: Path, target: Path, plan: dict, *,
                 force: bool, dry_run: bool, reencode_lossy: bool,
                 reencode_min_bitrate: int, comp: int,
                 strip_covers: bool, cover_max_size):
-    """Verarbeitet eine einzelne Datei (im Worker-Thread). Loggt nicht selbst,
-    sondern liefert (status, [(level, message), ...]) zurück, damit die Ausgabe
-    geordnet vom Hauptthread erfolgt. status: converted|copied|skipped|ignored|error."""
+    """Process a single file (in worker thread). Does not log directly,
+    but returns (status, [(level, message), ...]) so output is ordered
+    from main thread. status: converted|copied|skipped|ignored|error."""
     try:
         rel = src.relative_to(source)
         ext = ext_of(src)
         name_lower = src.name.lower()
 
-        # Bilder unter --strip-covers gar nicht übernehmen
+        # Don't include images when --strip-covers
         if strip_covers and ext in IMAGE_FORMATS:
-            return "ignored", [("debug", "Cover entfernt (nicht kopiert): %s" % rel)]
+            return "ignored", [("debug", "Cover removed (not copied): %s" % rel)]
 
-        # Aktion + Ziel bestimmen
+        # Determine action + target
         info = None
         if is_lossless(src):
             action = "transcode"
@@ -586,7 +584,7 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
 
         compare_size = action == "copy"
         if not force and is_up_to_date(src, dst, compare_size):
-            return "skipped", [("debug", "übersprungen (aktuell): %s" % rel)]
+            return "skipped", [("debug", "Skipped (current): %s" % rel)]
 
         if dry_run:
             status = "converted" if action in ("transcode", "transcode_lossy") else "copied"
@@ -599,36 +597,36 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
             ok, err = transcode(src, dst, bitrate, opus_tuning(info),
                                 plan["discard_embedded"], comp)
             if ok:
-                return "converted", [("info", "konvertiert: %s [%d kbps]" % (rel, bitrate))]
+                return "converted", [("info", "Converted: %s [%d kbps]" % (rel, bitrate))]
         elif action == "transcode_lossy":
             bitrate = determine_bitrate(info)
             ok, err = transcode_lossy(src, dst, bitrate, opus_tuning(info), info,
                                       plan["discard_embedded"], comp)
             if ok:
-                return "converted", [("info", "re-encodiert: %s [%d kbps]" % (rel, bitrate))]
+                return "converted", [("info", "Re-encoded: %s [%d kbps]" % (rel, bitrate))]
         elif action == "cover_resize":
             ok, err = cover_resize_file(src, dst, cover_max_size)
             if ok:
-                return "copied", [("info", "Cover verkleinert: %s" % rel)]
+                return "copied", [("info", "Cover resized: %s" % rel)]
         else:  # copy
             ok, err = copy(src, dst)
             if ok:
-                return "copied", [("info", "kopiert: %s" % rel)]
-        return "error", [("error", err or "Fehlgeschlagen: %s" % rel)]
-    except Exception as exc:  # pro Datei isolieren – nie den Lauf abbrechen
-        return "error", [("error", "Übersprungen (Fehler): %s (%s)" % (src, exc))]
+                return "copied", [("info", "Copied: %s" % rel)]
+        return "error", [("error", err or "Failed: %s" % rel)]
+    except Exception as exc:  # Isolate per file – never break the run
+        return "error", [("error", "Skipped (error): %s (%s)" % (src, exc))]
 
 
 def _album_needs_work(files: list, source: Path, target: Path) -> bool:
-    """True, wenn mind. eine Audiodatei (noch) zu verarbeiten ist – rein über
-    stat (kein ffprobe), nur um die teure Cover-Planung zu vermeiden."""
+    """True if at least one audio file still needs processing – via stat only
+    (no ffprobe), just to avoid expensive cover planning."""
     for f in files:
         rel = f.relative_to(source)
         if is_lossless(f):
             if not is_up_to_date(f, target / rel.with_suffix("." + TARGET_EXT), False):
                 return True
         elif ext_of(f) in LOSSY_FORMATS:
-            # Lossy kann als .opus (re-encodiert) ODER als Kopie vorliegen
+            # Lossy can be .opus (re-encoded) OR a copy
             opus_dst = target / rel.with_suffix("." + TARGET_EXT)
             copy_dst = target / rel
             if not (is_up_to_date(f, opus_dst, False) or is_up_to_date(f, copy_dst, True)):
@@ -646,14 +644,14 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         for src_dir, files in walk_by_directory(source, target):
-            # Album-Cover-Plan (seriell, vor den Track-Tasks)
+            # Album cover plan (serial, before track tasks)
             plan = {"discard_embedded": False, "write_cover": None}
             if strip_covers:
                 plan = {"discard_embedded": True, "write_cover": None}
             elif dedup_covers and (force or _album_needs_work(files, source, target)):
                 plan = plan_album_cover(files, reencode_lossy, reencode_min_bitrate)
 
-            # Tracks parallel verarbeiten ...
+            # Process tracks in parallel ...
             futures = [
                 pool.submit(process_one, src, source, target, plan,
                             force=force, dry_run=dry_run, reencode_lossy=reencode_lossy,
@@ -661,7 +659,7 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
                             strip_covers=strip_covers, cover_max_size=cover_max_size)
                 for src in files
             ]
-            # ... Ausgabe aber in Submission-Reihenfolge (lesbar)
+            # ... but collect output in submission order (readable)
             for fut in futures:
                 status, messages = fut.result()
                 for level, msg in messages:
@@ -670,7 +668,7 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
 
             covers += finalize_album_cover(src_dir, source, target, plan, dry_run, cover_max_size)
 
-            # Hybrid-Cleanup, Teil 1: verwaiste Dateien dieses Ordners sofort
+            # Hybrid cleanup, Part 1: remove orphaned files from this folder immediately
             if cleanup:
                 removed += cleanup_dir_files(
                     source, target, src_dir, dry_run=dry_run,
@@ -678,37 +676,37 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
                     reencode_min_bitrate=reencode_min_bitrate)
 
     log.info(
-        "Fertig | konvertiert=%d kopiert=%d übersprungen=%d Cover=%d Fehler=%d",
+        "Done | converted=%d copied=%d skipped=%d covers=%d errors=%d",
         counts["converted"], counts["copied"], counts["skipped"], covers, counts["error"],
     )
 
-    # Hybrid-Cleanup, Teil 2: verwaiste Verzeichnisse + leere Ordner am Ende
+    # Hybrid cleanup, Part 2: remove orphaned directories + empty folders at end
     if cleanup:
         removed += cleanup_dirs(source, target, dry_run=dry_run)
-        verb = "würden entfernt" if dry_run else "entfernt"
-        log.info("Bereinigung abgeschlossen | %d Objekte %s", removed, verb)
+        verb = "would be removed" if dry_run else "removed"
+        log.info("Cleanup completed | %d items %s", removed, verb)
     else:
-        log.info("Aufräumen übersprungen (--no-cleanup)")
+        log.info("Cleanup skipped (--no-cleanup)")
 
     return 2 if counts["error"] else 0
 
 
-# --- Bereinigung -------------------------------------------------------------
+# --- Cleanup -----------------------------------------------------------------
 def source_has_counterpart(target_file: Path, source: Path, target: Path,
                            reencode_lossy: bool,
                            reencode_min_bitrate: int = DEFAULT_REENCODE_MIN_BITRATE) -> bool:
-    """True, wenn es zur Zieldatei eine passende Quelle gibt."""
+    """True if a matching source exists for the target file."""
     rel_parent = target_file.parent.relative_to(target)
     name = target_file.name
     ext = ext_of(target_file)
     if ext == TARGET_EXT:
-        stem = name[: -(len(TARGET_EXT) + 1)]  # Endung per String entfernen (punktsicher)
-        # Verlustfreie Quelle ODER vorhandene .opus-Quelle -> .opus-Ziel immer gültig.
+        stem = name[: -(len(TARGET_EXT) + 1)]  # Remove extension by string (dot-safe)
+        # Lossless source OR existing .opus source → .opus target always valid.
         for e in OPUS_SOURCE_CANDIDATES:
             if (source / rel_parent / (stem + "." + e)).exists():
                 return True
-        # Verlustbehaftete Quelle -> nur gültig, wenn sie tatsächlich re-encodiert
-        # würde (Bitrate > Schwelle); sonst ist das Ziel eine Kopie, kein .opus.
+        # Lossy source → valid only if it would actually be re-encoded
+        # (bitrate > threshold); otherwise target is a copy, not .opus.
         if reencode_lossy:
             for e in LOSSY_FORMATS:
                 cand = source / rel_parent / (stem + "." + e)
@@ -719,8 +717,8 @@ def source_has_counterpart(target_file: Path, source: Path, target: Path,
     src_file = source / rel_parent / name
     if not src_file.exists():
         return False
-    # Mit --reencode-lossy wird eine verlustbehaftete Quelle ggf. zu .opus – dann
-    # ist die gleichnamige Nicht-Opus-Datei im Ziel überholt (Ziel sollte .opus sein).
+    # With --reencode-lossy, a lossy source may become .opus – then
+    # the same-named non-Opus file in target is superseded (should be .opus).
     if (reencode_lossy and ext in LOSSY_FORMATS
             and should_reencode(analyze_audio(src_file), reencode_min_bitrate)):
         return False
@@ -728,9 +726,9 @@ def source_has_counterpart(target_file: Path, source: Path, target: Path,
 
 
 def _remove(path: Path, dry_run: bool, recursive: bool = False) -> int:
-    """Entfernt path. Gibt 1 zurück, wenn entfernt (bzw. im Dry-Run gemeldet)."""
+    """Remove path. Return 1 if removed (or reported in dry-run)."""
     if dry_run:
-        log.info("[DRY-RUN] würde entfernen: %s", path)
+        log.info("[DRY-RUN] would remove: %s", path)
         return 1
     try:
         if recursive:
@@ -739,18 +737,18 @@ def _remove(path: Path, dry_run: bool, recursive: bool = False) -> int:
             path.rmdir()
         else:
             path.unlink()
-        log.info("entfernt: %s", path)
+        log.info("Removed: %s", path)
         return 1
     except OSError as exc:
-        log.error("Konnte nicht entfernen: %s (%s)", path, exc)
+        log.error("Could not remove: %s (%s)", path, exc)
         return 0
 
 
 def cleanup_dir_files(source: Path, target: Path, src_dir: Path, *, dry_run: bool,
                       dedup_covers: bool, reencode_lossy: bool,
                       reencode_min_bitrate: int) -> int:
-    """Entfernt verwaiste DATEIEN im zu src_dir gehörenden Zielordner (nicht
-    rekursiv). Läuft direkt nach Fertigstellung des Ordners."""
+    """Remove orphaned FILES in target folder corresponding to src_dir (non-recursive).
+    Runs immediately after folder completion."""
     rel = src_dir.relative_to(source)
     target_dir = target / rel
     if not target_dir.is_dir():
@@ -760,7 +758,7 @@ def cleanup_dir_files(source: Path, target: Path, src_dir: Path, *, dry_run: boo
         name = entry.name
         if name.startswith(".") or not entry.is_file():
             continue
-        # Generiertes Album-Cover behalten (Quell-Ordner existiert ja gerade)
+        # Keep generated album cover (source folder exists right now)
         if dedup_covers and name.lower() in COVER_FILENAMES:
             continue
         if not source_has_counterpart(entry, source, target, reencode_lossy,
@@ -770,11 +768,11 @@ def cleanup_dir_files(source: Path, target: Path, src_dir: Path, *, dry_run: boo
 
 
 def cleanup_dirs(source: Path, target: Path, *, dry_run: bool) -> int:
-    """Abschluss-Durchlauf: verwaiste VERZEICHNISSE (gelöschte Alben) und
-    anschließend leere Ordner entfernen."""
+    """Final pass: remove orphaned DIRECTORIES (deleted albums) and
+    then empty folders."""
     removed = 0
 
-    # 1) Verwaiste Verzeichnisse komplett entfernen
+    # 1) Remove orphaned directories completely
     for root, dirs, _files in os.walk(target, topdown=True):
         root_path = Path(root)
         survivors = []
@@ -786,9 +784,9 @@ def cleanup_dirs(source: Path, target: Path, *, dry_run: bool) -> int:
                 survivors.append(d)
             else:
                 removed += _remove(root_path / d, dry_run, recursive=True)
-        dirs[:] = survivors  # verwaiste nicht betreten
+        dirs[:] = survivors  # don't traverse orphaned
 
-    # 2) Leere Verzeichnisse entfernen (bottom-up)
+    # 2) Remove empty directories (bottom-up)
     for root, _dirs, _files in os.walk(target, topdown=False):
         root_path = Path(root)
         if root_path == target:
@@ -807,56 +805,56 @@ def cleanup_dirs(source: Path, target: Path, *, dry_run: bool) -> int:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="audioshrink",
-        description="Verkleinert eine Musiksammlung nach Opus (gespiegelte Struktur).",
+        description="Compresses a music collection to Opus (mirrored structure).",
     )
-    parser.add_argument("source", help="Quellverzeichnis")
-    parser.add_argument("target", help="Zielverzeichnis")
+    parser.add_argument("source", help="Source directory")
+    parser.add_argument("target", help="Target directory")
     parser.add_argument(
         "--no-cleanup", dest="cleanup", action="store_false",
-        help="Verwaiste Ziel-Dateien/-Ordner NICHT löschen",
+        help="Do NOT delete orphaned target files/folders",
     )
     parser.add_argument(
         "--no-cover-dedup", dest="dedup_covers", action="store_false",
-        help="Album-Cover NICHT deduplizieren (eingebettete Cover bleiben erhalten)",
+        help="Do NOT deduplicate album covers (embedded covers remain per file)",
     )
     parser.add_argument(
         "--no-reencode-lossy", dest="reencode_lossy", action="store_false",
-        help="Verlustbehaftete Quellen NICHT re-encodieren (immer kopieren)",
+        help="Do NOT re-encode lossy sources (always copy)",
     )
     parser.add_argument(
         "--reencode-min-bitrate", type=int, default=DEFAULT_REENCODE_MIN_BITRATE,
         metavar="KBPS",
-        help="Verlustbehaftete Quellen oberhalb dieser Bitrate re-encodieren "
-             "(Standard: %d)" % DEFAULT_REENCODE_MIN_BITRATE,
+        help="Re-encode lossy sources above this bitrate "
+             "(default: %d)" % DEFAULT_REENCODE_MIN_BITRATE,
     )
     parser.add_argument(
         "--comp", type=int, default=DEFAULT_COMP, metavar="0..10",
-        help="opusenc-Komplexität 0..10 (10=beste/langsamste, kleiner=schneller; "
-             "Standard: %d)" % DEFAULT_COMP,
+        help="opusenc complexity 0..10 (10=best/slowest, lower=faster; "
+             "default: %d)" % DEFAULT_COMP,
     )
     parser.add_argument(
         "--cover-max-size", type=int, default=None, metavar="PX",
-        help="Cover auf max. Kantenlänge PX verkleinern; benötigt ImageMagick",
+        help="Resize covers to max dimension PX; requires ImageMagick",
     )
     parser.add_argument(
         "--strip-covers", action="store_true",
-        help="Cover/Bilder vollständig entfernen (keine eingebetteten Cover, keine Bilddateien)",
+        help="Remove covers/images completely (no embedded covers, no image files)",
     )
     parser.add_argument(
         "--jobs", type=int, default=DEFAULT_JOBS, metavar="N",
-        help="Anzahl paralleler Konvertierungen (Standard: %d)" % DEFAULT_JOBS,
+        help="Number of parallel conversions (default: %d)" % DEFAULT_JOBS,
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Alle Aktionen (inkl. Löschungen) nur anzeigen, nichts ausführen",
+        help="Show all actions (including deletions) without executing",
     )
     parser.add_argument(
         "--force", action="store_true",
-        help="Alle Dateien neu verarbeiten (Aktualitätsprüfung ignorieren)",
+        help="Reprocess all files (ignore freshness check)",
     )
     parser.add_argument(
         "--debug", action="store_true",
-        help="Ausführliche Protokollausgabe (zeigt u. a. übersprungene Dateien)",
+        help="Verbose log output (shows skipped files, etc.)",
     )
     parser.add_argument(
         "--version", action="version", version="%(prog)s " + __version__
@@ -877,26 +875,26 @@ def main(argv=None) -> int:
     if not check_dependencies():
         return 1
     if not source.is_dir():
-        log.error("Quellverzeichnis nicht gefunden: %s", source)
+        log.error("Source directory not found: %s", source)
         return 1
     if source == target:
-        log.error("Quelle und Ziel dürfen nicht identisch sein")
+        log.error("Source and target must not be identical")
         return 1
     if args.reencode_lossy and shutil.which("ffmpeg") is None:
-        log.warning("ffmpeg fehlt – verlustbehaftete Quellen werden kopiert statt re-encodiert")
+        log.warning("ffmpeg missing – lossy sources will be copied instead of re-encoded")
         args.reencode_lossy = False
     if args.cover_max_size and im_cmd() is None:
-        log.error("ImageMagick (magick/convert) wird für --cover-max-size benötigt")
+        log.error("ImageMagick (magick/convert) required for --cover-max-size")
         return 1
     if args.dedup_covers and not args.strip_covers and shutil.which("metaflac") is None:
-        log.warning("metaflac fehlt – Cover-Deduplizierung wird übersprungen")
+        log.warning("metaflac missing – cover deduplication will be skipped")
         args.dedup_covers = False
     if not args.dry_run:
         target.mkdir(parents=True, exist_ok=True)
 
     jobs = max(1, args.jobs)
     comp = min(10, max(0, args.comp))
-    log.info("Start | Quelle=%s Ziel=%s | Jobs=%d Comp=%d", source, target, jobs, comp)
+    log.info("Start | source=%s target=%s | jobs=%d comp=%d", source, target, jobs, comp)
     return run(
         source, target,
         force=args.force, dry_run=args.dry_run, dedup_covers=args.dedup_covers,
