@@ -124,3 +124,16 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 `audioshrink.py` (+ optional `fix_covers.py`) into a PATH directory or copy to
 `/volume1/public/` – no installation/dependencies beyond standard library.
 **Result:** Production-ready.
+
+## 1.1 — Quick Wins & Hardware Detection✅
+**Focus:** Fixes and dynamic resource allocation.
+**New:**
+- Bitrate threshold (`--reencode-min-bitrate`) now applies inclusively (e.g., `>= 320 kbps`).
+- `--jobs` defaults to all available CPU cores minus 1 (`os.cpu_count() - 1`) to maximize utilization without freezing the system.
+**Result:** 320 kbps MP3s are reliably shrunk; out-of-the-box performance improvement on multi-core systems.
+
+## 1.2 — Performance Leap (Planned)
+**Focus:** Eliminating process startup overhead for large libraries.
+**New:** Replace `ffprobe` with the native Python library `mutagen` for reading metadata.
+**Result:** Massive time savings for libraries with >10,000 tracks by avoiding external process spawning per file (requires dropping the "no pip packages" rule).
+

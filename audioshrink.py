@@ -40,8 +40,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.0.0"
-DEFAULT_JOBS = 2    # Leave cores for other NAS tasks
+__version__ = "1.1.0"
+# determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
+DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
 DEFAULT_REENCODE_MIN_BITRATE = 320   # kbps; lossy sources ABOVE this are re-encoded
 
@@ -228,9 +229,9 @@ def opus_tuning(info: dict) -> str:
 
 def should_reencode(info: dict, min_bitrate: int = DEFAULT_REENCODE_MIN_BITRATE) -> bool:
     """Whether a lossy source should be re-encoded – decision based ONLY on
-    source bitrate (not genre): above threshold and actually shrinking."""
+    source bitrate (not genre): equal or above threshold and actually shrinking."""
     src_br = info.get("bitrate_kbps", 0)
-    return src_br > min_bitrate and src_br > determine_bitrate(info)
+    return src_br >= min_bitrate and src_br > determine_bitrate(info)
 
 
 def build_metadata_opts(info: dict) -> list:

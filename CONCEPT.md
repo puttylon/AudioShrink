@@ -101,3 +101,8 @@ Cover-dedup on · Cleanup on. All overridable via CLI (see README).
   (strict mirror). Companion files remain as long as they exist in the source;
   only source-less targets are removed.
 - No ffmpeg as encoder; no pip dependencies.
+---
+
+## 8. Known Issues / ToDo
+
+- **Image Extensions:** When falling back to `ffmpeg` to extract covers from lossy sources, the script currently checks only for PNG and GIF headers. Other web-native formats (like WebP) or BMP are saved with a `.jpg` extension. This is very rare in standard music collections but should be addressed in a future update to avoid confusing external parsers.
