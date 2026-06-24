@@ -26,11 +26,12 @@ wird auf einem von Anfang an funktionierenden Skelett gestapelt.
 | 0.8 | Parallelisierung & Performance | ✅ fertig (Standard: 4 Jobs) |
 | 0.91 | Tests (stdlib unittest-Suite) | ✅ fertig |
 | 0.92 | Re-Encode-Politik (Bitrate-Schwelle) + Hybrid-Cleanup | ✅ fertig |
-| 0.95 | README/Doku & Härtung | offen |
+| 0.95 | README/Doku & Härtung | ✅ fertig |
 | 1.0 | Release | offen |
 
-(0.9x lässt Raum für unterwegs Aufgefallenes – z. B. eine „Ziel-Whitelist", die
-Begleitdateien wie `.lrc`/`.jpg` im Ziel auch ohne Quelle verschont.)
+(Die in 0.9x erwogene „Ziel-Whitelist" wurde verworfen: Der strikte Spiegel ist
+gewollt – Begleitdateien bleiben, solange sie in der Quelle liegen; nur quell-lose
+Ziele werden entfernt.)
 
 ---
 
@@ -112,11 +113,13 @@ Re-Encode-Fälle) und `plan_album_cover` (mit gemockten externen Tools).
 werden schnell kopiert statt langsam re-encodiert.
 
 ## 0.95 — README/Doku & Härtung
-**Fokus:** Bedienbarkeit & Sonderfälle.
-**Neu:** README/Bedienungsanleitung, Sonderfälle (Sonderzeichen in Pfaden/Tags,
-leere Ordner, konfigurierbare `IGNORE_DIRS`), optional `--ext opus/ogg`, ggf.
-Ziel-Whitelist für Begleitdateien.
-**Ergebnis:** Dokumentiert und robust.
+**Fokus:** Bedienbarkeit & Dokumentation.
+**Erledigt:** README.md (Bedienungsanleitung mit allen Optionen/Defaults),
+CONCEPT.md zum schlanken Design-/Architekturdokument verschlankt (kein
+versionssynchroner Pseudocode mehr; Code ist die Quelle der Wahrheit). Härtung
+ist überwiegend durch die realen NAS-Bugfixes (0.9.x) erfolgt.
+**Offen/optional:** `--ext opus/ogg` (bei Bedarf).
+**Ergebnis:** Dokumentiert und im Alltag erprobt.
 
 ## 1.0 — Release
 **Fokus:** Stabil & verteilbar.
