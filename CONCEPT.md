@@ -1,103 +1,103 @@
-# AudioShrink – Konzept & Architektur
+# AudioShrink – Concept & Architecture
 
-Dieses Dokument beschreibt das **Warum** und den **Aufbau** von AudioShrink.
-Die **Bedienung** steht im [README.md](README.md), das **Implementierungsdetail**
-in [audioshrink.py](audioshrink.py) (die maßgebliche Quelle der Wahrheit).
+This document describes the **why** and **structure** of AudioShrink.
+The **usage** is in [README.md](README.md), the **implementation details**
+in [audioshrink.py](audioshrink.py) (the authoritative source of truth).
 
-Es wird **nicht** versionssynchron gepflegt – es hält die stabilen Design-
-Entscheidungen fest, nicht die Versionshistorie (die kommt in einen Changelog).
-
----
-
-## 1. Zweck
-
-Aus einer großen, heterogenen Musiksammlung eine kompakte, mobile, einheitlich
-formatierte **Opus**-Spiegelkopie erzeugen – typisch 10–20 % der Ausgangsgröße,
-ohne hörbare Qualitätsverluste.
+It is **not** maintained version-synchronously – it captures stable design
+decisions, not version history (which belongs in the changelog).
 
 ---
 
-## 2. Designprinzipien
+## 1. Purpose
 
-| Prinzip | Festlegung |
+Create a compact, mobile, uniformly formatted **Opus** mirror copy from a large,
+heterogeneous music collection – typically 10–20% of the original size,
+without audible quality loss.
+
+---
+
+## 2. Design Principles
+
+| Principle | Commitment |
 |---|---|
-| Portabilität | Läuft auf beliebigen Linux-Systemen, unabhängig von der Shell. Nur Python-3-**Standardbibliothek** (Mindestversion **3.8**), keine pip-Pakete. |
-| Encoder-Disziplin | **opusenc ist der einzige Encoder.** ffmpeg wird nie zum Encodieren benutzt. |
-| Spiegel-Invariante | Die relative Zielstruktur ist stets identisch zur Quelle. |
-| Idempotenz / Fortsetzbarkeit | Wiederholte Läufe verarbeiten nur Neues/Geändertes; ein Abbruch hinterlässt fertige Alben konsistent. |
-| Robustheit | Pro-Datei-Fehler brechen den Lauf nicht ab; Schreiben erfolgt atomar (Temp-Datei + Umbenennen). |
+| Portability | Runs on any Linux system, shell-independent. Python-3 **standard library only** (minimum version **3.8**), no pip packages. |
+| Encoder discipline | **opusenc is the only encoder.** ffmpeg is never used for encoding. |
+| Mirror invariant | The relative target structure is always identical to the source. |
+| Idempotence / Resumability | Repeated runs process only new/changed files; an interruption leaves completed albums consistent. |
+| Robustness | Per-file errors do not break the run; writes are atomic (temp file + rename). |
 
 ---
 
-## 3. Werkzeug-Einsatz (verbindliche Aufgabenteilung)
+## 3. Tool Usage (Binding Task Division)
 
-| Aufgabe | Werkzeug |
+| Task | Tool |
 |---|---|
-| Encoding **aller** Ausgaben nach Opus | **opusenc** (einziger Encoder) |
-| Native Eingaben (FLAC/WAV/AIFF) lesen | opusenc direkt (Tags + Cover automatisch) |
-| Lossy-Quellen für Re-Encode **dekodieren** | **ffmpeg** → PCM-Pipe an opusenc (nur Dekoder); Tags/Cover via ffprobe→opusenc neu gesetzt |
-| Audio-Analyse (Samplerate, Bitrate, Tags) | **ffprobe** (nur lesend) |
-| Cover extrahieren (für Dedup) | **metaflac** (FLAC) bzw. **ffmpeg** (Lossy, unverändertes Kopieren) |
-| Cover verkleinern (optional) | **ImageMagick** |
+| Encoding **all** output to Opus | **opusenc** (only encoder) |
+| Read native inputs (FLAC/WAV/AIFF) | opusenc directly (tags + covers automatically) |
+| **Decode** lossy sources for re-encode | **ffmpeg** → PCM pipe to opusenc (decoder only); tags/covers re-set via ffprobe → opusenc |
+| Audio analysis (sample rate, bitrate, tags) | **ffprobe** (read-only) |
+| Extract covers (for dedup) | **metaflac** (FLAC) or **ffmpeg** (lossy, unchanged copy) |
+| Resize covers (optional) | **ImageMagick** |
 
-> opusenc liest nur WAV/AIFF/FLAC/raw-PCM – verlustbehaftete Formate müssen daher
-> vor dem Encoden dekodiert werden (ffmpeg als Dekoder, **nicht** als Encoder).
-
----
-
-## 4. Architektur-Überblick
-
-Verarbeitung erfolgt **ordnerweise** (ein „Album"), weil die Cover-Deduplizierung
-einen Album-Kontext braucht. Je Ordner:
-
-1. **Cover-Plan** bestimmen (nur wenn etwas zu tun ist): teilen sich alle
-   transkodierten Tracks dasselbe eingebettete Cover bzw. liegt eine separate
-   Cover-Datei vor?
-2. **Tracks parallel** verarbeiten (ThreadPool – die eigentliche Arbeit läuft in
-   opusenc/ffmpeg als externe Prozesse). Pro Datei: analysieren → entscheiden
-   (transkodieren / re-encodieren / kopieren / überspringen) → ausführen → loggen.
-   Logausgabe wird in Submission-Reihenfolge eingesammelt (lesbar trotz Parallelität).
-3. **Album-Cover** abschließend ablegen (eine `cover.jpg`/`.png`, falls dedupliziert).
-4. **Hybrid-Cleanup, Teil 1:** verwaiste Dateien dieses Ordners sofort entfernen.
-
-Am Ende: **Hybrid-Cleanup, Teil 2:** verwaiste Verzeichnisse + leere Ordner.
+> opusenc reads only WAV/AIFF/FLAC/raw-PCM – lossy formats must thus
+> be decoded before encoding (ffmpeg as decoder, **not** as encoder).
 
 ---
 
-## 5. Kern-Entscheidungen
+## 4. Architecture Overview
 
-- **Formatwahl je Datei:** FLAC/WAV/AIFF → Opus; verlustbehaftet → Re-Encode nach
-  Opus **nur wenn Bitrate > Schwelle**, sonst Kopie; Bilder → kopieren/verkleinern/
-  entfernen; sonstige → kopieren.
-- **Re-Encode-Entscheidung: nur Bitrate, kein Genre.** Schwelle einstellbar
-  (Standard 320 kbps). Begründung: konsistent und vorhersehbar; vermeidet das
-  langsame, kaum lohnende Re-Encoden ohnehin schon kleiner (niedrigbitratiger) Dateien.
-- **Zielbitrate/Tuning: genre-bewusst.** Samplerate-Basis (160/128/96), Sprach-Genres
-  → 64 kbps + `--speech`, Deckelung auf die Quellbitrate. **Keine** Absenkung nach
-  Tracklänge (Länge ist kein Maß für den Bitratenbedarf).
-- **Cover-Deduplizierung** über **alle transkodierten Tracks** (FLAC **und**
-  re-encodete Lossy): gemeinsames Cover → eine Datei im Ordner, Bild aus den Opus
-  verworfen (`--discard-pictures`). Spart das Vielfache des Cover-Volumens je Album.
-- **Aufräumen = Spiegel, schwellenbewusst:** Ein Ziel ist gültig, wenn es exakt das
-  ist, was die Quelle aktuell produziert. Insbesondere ist ein `.opus` aus einer
-  Lossy-Quelle nur gültig, wenn diese auch tatsächlich re-encodiert würde – sonst
-  (Kopie-Fall) ist es verwaist. So bleibt bei geänderter Schwelle je Datei genau
-  ein korrektes Zielformat übrig.
-- **Keine Umgebungs-Eingriffe:** kein Setzen von Besitzer/Rechten – Dateien erhalten
-  die Standardrechte des ausführenden Benutzers.
+Processing occurs **folder-by-folder** (one "album") because cover deduplication
+needs album context. Per folder:
+
+1. **Determine cover plan** (only if work is needed): do all transcoded tracks
+   share the same embedded cover, or is there a separate cover file?
+2. **Process tracks in parallel** (ThreadPool – the actual work runs in
+   opusenc/ffmpeg as external processes). Per file: analyze → decide
+   (transcode / re-encode / copy / skip) → execute → log.
+   Log output is collected in submission order (readable despite parallelism).
+3. **Finalize album cover** (one `cover.jpg`/`.png`, if deduplicated).
+4. **Hybrid cleanup, Part 1:** remove orphaned files in this folder immediately.
+
+At the end: **Hybrid cleanup, Part 2:** remove orphaned directories + empty folders.
 
 ---
 
-## 6. Standardwerte (Stand der Auslieferung)
+## 5. Core Decisions
 
-`--jobs 2` · `--comp 6` · `--reencode-min-bitrate 320` · Re-Encode an ·
-Cover-Dedup an · Cleanup an. Alle per CLI überschreibbar (siehe README).
+- **Format choice per file:** FLAC/WAV/AIFF → Opus; lossy → Re-encode to Opus
+  **only if bitrate > threshold**, otherwise copy; images → copy/resize/remove;
+  other → copy.
+- **Re-encode decision: bitrate only, no genre.** Threshold adjustable
+  (default 320 kbps). Rationale: consistent and predictable; avoids slow,
+  barely worthwhile re-encoding of already small (low-bitrate) files.
+- **Target bitrate/tuning: genre-aware.** Sample-rate basis (160/128/96),
+  speech genres → 64 kbps + `--speech`, capped to source bitrate.
+  **No** reduction by track length (length is not a measure of bitrate need).
+- **Cover deduplication** across **all transcoded tracks** (FLAC **and**
+  re-encoded lossy): shared cover → one file in folder, image removed from Opus
+  (`--discard-pictures`). Saves multiples of cover volume per album.
+- **Cleanup = mirror, threshold-aware:** A target is valid if it is exactly
+  what the source currently produces. In particular, a `.opus` from a lossy
+  source is valid only if that source would actually be re-encoded – otherwise
+  (copy case) it is orphaned. Thus with changed threshold, each file has
+  exactly one correct target format.
+- **No environment changes:** no setting owner/permissions – files get the
+  default permissions of the executing user.
 
 ---
 
-## 7. Bewusste Nicht-Ziele
+## 6. Default Values (At Release)
 
-- Keine Tracklängen-abhängige Bitrate.
-- Keine „Ziel-Whitelist": Dateien ohne Quell-Entsprechung werden bewusst entfernt
-  (strikter Spiegel). Begleitdateien bleiben, solange sie in der Quelle liegen.
-- Kein ffmpeg als Encoder; keine pip-Abhängigkeiten.
+`--jobs 2` · `--comp 6` · `--reencode-min-bitrate 320` · Re-encode on ·
+Cover-dedup on · Cleanup on. All overridable via CLI (see README).
+
+---
+
+## 7. Deliberate Non-Goals
+
+- No track-length-dependent bitrate.
+- No "target whitelist": files without source counterpart are deliberately removed
+  (strict mirror). Companion files remain as long as they exist in the source;
+  only source-less targets are removed.
+- No ffmpeg as encoder; no pip dependencies.

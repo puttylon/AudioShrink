@@ -1,52 +1,52 @@
 # Changelog
 
-Nennenswerte Änderungen an AudioShrink. Format angelehnt an „Keep a Changelog",
-Versionierung sinngemäß nach SemVer.
+Notable changes to AudioShrink. Format inspired by "Keep a Changelog",
+versioning roughly following SemVer.
 
 ## 1.0.0 — 2026-06-24
 
-Erste stabile Version. Im produktiven Einsatz auf einer großen Sammlung
-(Synology DS718plus, Python 3.8) erprobt.
+First stable release. Tested in production on a large collection
+(Synology DS718plus, Python 3.8).
 
-### Funktionsumfang
-- Spiegelt QUELLE → ZIEL mit identischer Struktur; **inkrementell** (überspringt
-  Aktuelles) und **fortsetzbar** nach Abbruch.
-- FLAC/WAV/AIFF → **Opus** (opusenc als einziger Encoder).
-- Verlustbehaftete Quellen: kopieren, oder **Re-Encode** nach Opus **oberhalb einer
-  Bitrate-Schwelle** (Standard 320 kbps; `--no-reencode-lossy`). ffmpeg dient dabei
-  nur als Dekoder; Tags/Cover werden neu gesetzt.
-- **Intelligente Zielbitrate**: Samplerate-Basis (160/128/96), Sprach-Genres
-  → 64 kbps + `--speech`, Deckelung auf die Quellbitrate.
-- **Album-Cover-Deduplizierung**: gemeinsames Cover → eine `cover.jpg`/`.png` im
-  Ordner, aus den Opus-Dateien entfernt (FLAC **und** re-encodete Lossy);
-  `--no-cover-dedup`.
-- **Cover verkleinern** (`--cover-max-size`, ImageMagick) und **entfernen**
+### Features
+- Mirrors SOURCE → TARGET with identical structure; **incremental** (skips current)
+  and **resumable** after interruption.
+- FLAC/WAV/AIFF → **Opus** (opusenc as sole encoder).
+- Lossy sources: copy, or **re-encode to Opus above a bitrate threshold**
+  (default 320 kbps; `--no-reencode-lossy`). ffmpeg serves only as decoder;
+  tags/covers are re-set.
+- **Intelligent target bitrate**: sample-rate basis (160/128/96), speech genres
+  → 64 kbps + `--speech`, capped to source bitrate.
+- **Album cover deduplication**: shared cover → one `cover.jpg`/`.png` in folder,
+  removed from Opus files (FLAC **and** re-encoded lossy); `--no-cover-dedup`.
+- **Resize covers** (`--cover-max-size`, ImageMagick) and **remove**
   (`--strip-covers`).
-- **Spiegel-Aufräumen**, schwellenbewusst und **hybrid** (verwaiste Dateien je Ordner
-  sofort, Verzeichnisse/Leerordner am Ende). Standard an; `--no-cleanup`, `--dry-run`.
-- **Parallel** über ThreadPool (`--jobs`, Standard 2).
-- Robust: Pro-Datei-Fehler brechen den Lauf nicht ab; atomares Schreiben; nur
-  Python-3.8-Standardbibliothek, keine pip-Pakete.
-- Hilfsskript `fix_covers.py` zum gezielten Nachrüsten fehlender Album-Cover.
-- Test-Suite: `python3 -m unittest test_audioshrink`.
+- **Mirror cleanup**, threshold-aware and **hybrid** (orphaned files per folder
+  immediately, directories/empty folders at end). Default on; `--no-cleanup`,
+  `--dry-run`.
+- **Parallel** via ThreadPool (`--jobs`, default 2).
+- Robust: per-file errors do not break the run; atomic writes; Python 3.8
+  standard library only, no pip packages.
+- Helper script `fix_covers.py` for targeted regeneration of missing album covers.
+- Test suite: `python3 -m unittest test_audioshrink`.
 
-### Standardwerte
-`--jobs 2` · `--comp 6` · `--reencode-min-bitrate 320` · Re-Encode / Cover-Dedup /
-Cleanup jeweils an.
+### Default Values
+`--jobs 2` · `--comp 6` · `--reencode-min-bitrate 320` · Re-encode / Cover-dedup /
+Cleanup each on.
 
-## Entwicklung (0.x)
+## Development (0.x)
 
-- **0.1** Grundgerüst: FLAC/WAV/AIFF → Opus, Struktur spiegeln.
-- **0.2** Inkrementelle Verarbeitung (Skip nach mtime/Größe), `--force`, `--debug`.
-- **0.3** Intelligente Bitrate (ffprobe: Samplerate/Genre/Quellbitrate).
-- **0.4** Spiegel-Bereinigung (Cleanup, `--no-cleanup`, `--dry-run`).
-- **0.5** Album-Cover-Deduplizierung (FLAC) + Versionsanzeige. — 0.5.1: atomares Schreiben.
-- **0.6/0.7** Cover-Optimierung (ImageMagick) + Lossy-Re-Encode (ffmpeg-Dekoder → opusenc).
-  — 0.8.1: Cleanup entfernt überholte Nicht-Opus-Ziele.
-- **0.8** Parallelisierung (ThreadPool, `--jobs`).
-- **0.9.1** Test-Suite (stdlib unittest).
-- **0.9.2** Re-Encode-Politik (Bitrate-Schwelle, genre-unabhängig) + Hybrid-Cleanup.
-- **0.9.3** Robuste Cover-Extraktion (Bildstream kopieren statt re-encodieren).
-- **0.9.6** Cover-Deduplizierung auch für re-encodete Lossy-Alben.
-- **0.9.7** Cleanup schwellenbewusst (entfernt verwaiste `.opus` bei angehobener Schwelle).
-- Defaults final auf `--comp 6`, `--reencode-min-bitrate 320`, `--jobs 2` gesetzt.
+- **0.1** Skeleton: FLAC/WAV/AIFF → Opus, mirror structure.
+- **0.2** Incremental processing (skip by mtime/size), `--force`, `--debug`.
+- **0.3** Intelligent bitrate (ffprobe: sample-rate/genre/source bitrate).
+- **0.4** Mirror cleanup (cleanup, `--no-cleanup`, `--dry-run`).
+- **0.5** Album cover deduplication (FLAC) + version display. — 0.5.1: atomic writes.
+- **0.6/0.7** Cover optimization (ImageMagick) + lossy re-encode (ffmpeg decoder → opusenc).
+  — 0.8.1: cleanup removes obsolete non-Opus targets.
+- **0.8** Parallelization (ThreadPool, `--jobs`).
+- **0.9.1** Test suite (stdlib unittest).
+- **0.9.2** Re-encode policy (bitrate threshold, genre-independent) + hybrid cleanup.
+- **0.9.3** Robust cover extraction (copy image stream instead of re-encoding).
+- **0.9.6** Cover deduplication also for re-encoded lossy albums.
+- **0.9.7** Cleanup is threshold-aware (removes orphaned `.opus` with raised threshold).
+- Defaults finally set to `--comp 6`, `--reencode-min-bitrate 320`, `--jobs 2`.
