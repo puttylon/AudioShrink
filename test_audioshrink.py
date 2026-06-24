@@ -61,8 +61,9 @@ class TestShouldReencode(unittest.TestCase):
             a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128, "genre": "Hörbuch"}, 192))
 
     def test_default_and_custom_threshold(self):
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}))
-        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}))
+        # Default-Schwelle ist 320
+        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 400}))
+        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}))
         self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}, 128))
 
 
@@ -192,14 +193,14 @@ class TestSourceHasCounterpart(unittest.TestCase):
         self._src("song.mp3")
         tf = self._tgt("song.mp3")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}):
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
             self.assertFalse(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_reencode_keeps_opus(self):
         self._src("song.mp3")
         tf = self._tgt("song.opus")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}):
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
             self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_opus_orphan_when_source_below_threshold(self):

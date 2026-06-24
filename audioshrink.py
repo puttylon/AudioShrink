@@ -11,7 +11,7 @@ Version 0.9.6 (Re-Encode-Politik, Hybrid-Cleanup, Cover-Dedup auch für Lossy):
     Cover/Bilder vollständig.
   - Verlustbehaftete Quellen (MP3/AAC/...) werden standardmäßig nach Opus
     re-encodiert, wenn ihre Bitrate über der Schwelle liegt (--reencode-min-bitrate,
-    Standard 192 kbps); darunter werden sie kopiert. Abschaltbar mit
+    Standard 320 kbps); darunter werden sie kopiert. Abschaltbar mit
     --no-reencode-lossy. Die Entscheidung hängt NUR an der Quellbitrate (kein Genre);
     die Zielbitrate/Tuning beim Encoden berücksichtigt Genre weiterhin
     (Speech -> 64 kbps, --speech). ffmpeg dekodiert, opusenc encodiert.
@@ -20,7 +20,7 @@ Version 0.9.6 (Re-Encode-Politik, Hybrid-Cleanup, Cover-Dedup auch für Lossy):
     Aufräumen erfolgt hybrid: verwaiste Dateien sofort nach jedem Ordner,
     verwaiste Verzeichnisse + leere Ordner am Ende.
   - --dry-run zeigt alle Aktionen (inkl. Löschungen) nur an.
-  - Konvertierungen laufen parallel (--jobs N, Standard 4); Logausgabe bleibt
+  - Konvertierungen laufen parallel (--jobs N, Standard 2); Logausgabe bleibt
     pro Album in Reihenfolge.
   - Pro-Datei-Fehler brechen den Lauf nicht ab.
 
@@ -42,9 +42,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 __version__ = "0.9.7"
-DEFAULT_JOBS = 4
-DEFAULT_COMP = 10   # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
-DEFAULT_REENCODE_MIN_BITRATE = 192   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
+DEFAULT_JOBS = 2    # Kerne für andere NAS-Aufgaben frei lassen
+DEFAULT_COMP = 6    # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
+DEFAULT_REENCODE_MIN_BITRATE = 320   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
 
 # --- Konfiguration -----------------------------------------------------------
 LOSSLESS_FORMATS = {"flac", "wav", "aiff", "aif"}   # opusenc liest diese nativ
@@ -831,8 +831,8 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--comp", type=int, default=DEFAULT_COMP, metavar="0..10",
-        help="opusenc-Komplexität (Standard: %d = beste/langsamste; kleiner = schneller)"
-             % DEFAULT_COMP,
+        help="opusenc-Komplexität 0..10 (10=beste/langsamste, kleiner=schneller; "
+             "Standard: %d)" % DEFAULT_COMP,
     )
     parser.add_argument(
         "--cover-max-size", type=int, default=None, metavar="PX",
