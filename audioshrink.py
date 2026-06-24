@@ -41,7 +41,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 DEFAULT_JOBS = 4
 DEFAULT_COMP = 10   # opusenc-Komplexität 0..10 (10=beste/langsamste); kleiner = schneller
 DEFAULT_REENCODE_MIN_BITRATE = 192   # kbps; verlustbehaftete Quellen DARÜBER werden re-encodiert
@@ -703,11 +703,18 @@ def source_has_counterpart(target_file: Path, source: Path, target: Path,
     ext = ext_of(target_file)
     if ext == TARGET_EXT:
         stem = name[: -(len(TARGET_EXT) + 1)]  # Endung per String entfernen (punktsicher)
-        candidates = OPUS_SOURCE_CANDIDATES | (LOSSY_FORMATS if reencode_lossy else set())
-        return any(
-            (source / rel_parent / (stem + "." + e)).exists()
-            for e in candidates
-        )
+        # Verlustfreie Quelle ODER vorhandene .opus-Quelle -> .opus-Ziel immer gültig.
+        for e in OPUS_SOURCE_CANDIDATES:
+            if (source / rel_parent / (stem + "." + e)).exists():
+                return True
+        # Verlustbehaftete Quelle -> nur gültig, wenn sie tatsächlich re-encodiert
+        # würde (Bitrate > Schwelle); sonst ist das Ziel eine Kopie, kein .opus.
+        if reencode_lossy:
+            for e in LOSSY_FORMATS:
+                cand = source / rel_parent / (stem + "." + e)
+                if cand.exists() and should_reencode(analyze_audio(cand), reencode_min_bitrate):
+                    return True
+        return False
 
     src_file = source / rel_parent / name
     if not src_file.exists():

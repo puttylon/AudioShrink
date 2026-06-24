@@ -198,7 +198,35 @@ class TestSourceHasCounterpart(unittest.TestCase):
     def test_reencode_keeps_opus(self):
         self._src("song.mp3")
         tf = self._tgt("song.opus")
-        self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}):
+            self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
+
+    def test_opus_orphan_when_source_below_threshold(self):
+        # song.mp3 (256k) bei Schwelle 320 -> wird kopiert, NICHT re-encodiert
+        # -> ein vorhandenes song.opus (aus einem Lauf mit niedrigerer Schwelle) ist verwaist
+        self._src("song.mp3")
+        tf = self._tgt("song.opus")
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 256}):
+            self.assertFalse(
+                a.source_has_counterpart(tf, self.source, self.target, True, 320))
+
+    def test_opus_valid_when_source_above_threshold(self):
+        self._src("song.mp3")
+        tf = self._tgt("song.opus")
+        with mock.patch.object(a, "analyze_audio",
+                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
+            self.assertTrue(
+                a.source_has_counterpart(tf, self.source, self.target, True, 320))
+
+    def test_opus_valid_from_flac_regardless_of_lossy_sibling(self):
+        # song.opus stammt aus song.flac -> gültig, auch wenn daneben song.mp3 (<=Schwelle) liegt
+        self._src("song.flac")
+        self._src("song.mp3")
+        tf = self._tgt("song.opus")
+        self.assertTrue(
+            a.source_has_counterpart(tf, self.source, self.target, True, 320))
 
     def test_reencode_low_bitrate_keeps_mp3(self):
         self._src("song.mp3")
