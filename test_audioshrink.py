@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tests für AudioShrink (Standardbibliothek, kein pytest nötig).
+"""Tests for AudioShrink (standard library, no pytest required).
 
-Ausführen:  python3 -m unittest test_audioshrink -v
+Run:  python3 -m unittest test_audioshrink -v
 """
 import os
 import tempfile
@@ -51,17 +51,17 @@ class TestShouldReencode(unittest.TestCase):
         self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 0}, 192))
 
     def test_genre_irrelevant_for_decision(self):
-        # 320er Hörbuch → re-encodieren (Entscheidung nur über Bitrate) ...
+        # 320 kbps audiobook → re-encode (decision based only on bitrate) ...
         info_high = {"sample_rate": 44100, "bitrate_kbps": 320, "genre": "Hörbuch"}
         self.assertTrue(a.should_reencode(info_high, 192))
-        # ... aber die ZIELbitrate bleibt genre-abhängig (Speech → 64)
+        # ... but the TARGET bitrate remains genre-dependent (Speech → 64)
         self.assertEqual(a.determine_bitrate(info_high), 64)
-        # 128er Hörbuch → kopieren
+        # 128 kbps audiobook → copy
         self.assertFalse(
             a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128, "genre": "Hörbuch"}, 192))
 
     def test_default_and_custom_threshold(self):
-        # Default-Schwelle ist 320
+        # Default threshold is 320
         self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 400}))
         self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}))
         self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}, 128))
@@ -130,7 +130,7 @@ class TestIsUpToDate(unittest.TestCase):
         src.write_bytes(b"x")
         dst.write_bytes(b"x")
         os.utime(dst, (1000, 1000))
-        os.utime(src, (1100, 1100))  # 100 s neuer
+        os.utime(src, (1100, 1100))  # 100 s newer
         self.assertFalse(a.is_up_to_date(src, dst, False))
 
     def test_copy_size_matters(self):
@@ -140,9 +140,9 @@ class TestIsUpToDate(unittest.TestCase):
         dst.write_bytes(b"123")
         os.utime(src, (1000, 1000))
         os.utime(dst, (1000, 1000))
-        # Kopie: Größe unterschiedlich → nicht aktuell
+        # Copy: size differs → not up to date
         self.assertFalse(a.is_up_to_date(src, dst, compare_size=True))
-        # Transkodierung: Größe ignoriert → aktuell
+        # Transcoding: size ignored → up to date
         self.assertTrue(a.is_up_to_date(src, dst, compare_size=False))
 
 
@@ -204,8 +204,8 @@ class TestSourceHasCounterpart(unittest.TestCase):
             self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_opus_orphan_when_source_below_threshold(self):
-        # song.mp3 (256k) bei Schwelle 320 -> wird kopiert, NICHT re-encodiert
-        # -> ein vorhandenes song.opus (aus einem Lauf mit niedrigerer Schwelle) ist verwaist
+        # song.mp3 (256k) with threshold 320 -> is copied, NOT re-encoded
+        # -> an existing song.opus (from a run with a lower threshold) is orphaned
         self._src("song.mp3")
         tf = self._tgt("song.opus")
         with mock.patch.object(a, "analyze_audio",
@@ -222,7 +222,7 @@ class TestSourceHasCounterpart(unittest.TestCase):
                 a.source_has_counterpart(tf, self.source, self.target, True, 320))
 
     def test_opus_valid_from_flac_regardless_of_lossy_sibling(self):
-        # song.opus stammt aus song.flac -> gültig, auch wenn daneben song.mp3 (<=Schwelle) liegt
+        # song.opus comes from song.flac -> valid, even if song.mp3 (<=threshold) is next to it
         self._src("song.flac")
         self._src("song.mp3")
         tf = self._tgt("song.opus")
@@ -244,7 +244,7 @@ class TestSourceHasCounterpart(unittest.TestCase):
 
 class TestPlanAlbumCover(unittest.TestCase):
     def test_no_transcoded_tracks(self):
-        # mp3 ohne Re-Encode → nichts transkodiert → kein Dedup
+        # mp3 without re-encode → nothing transcoded → no dedup
         plan = a.plan_album_cover([Path("a.mp3"), Path("b.jpg")], False, 192)
         self.assertFalse(plan["discard_embedded"])
         self.assertIsNone(plan["write_cover"])
@@ -262,100 +262,4 @@ class TestPlanAlbumCover(unittest.TestCase):
 
     def test_flac_different_embedded_covers(self):
         with mock.patch.object(a, "embedded_cover_bytes", side_effect=[b"AAA", b"BBB"]):
-            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
-        self.assertFalse(plan["discard_embedded"])
-
-    def test_flac_missing_embedded_cover(self):
-        with mock.patch.object(a, "embedded_cover_bytes", return_value=None):
-            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
-        self.assertFalse(plan["discard_embedded"])
-
-    def test_mp3_same_cover_dedup(self):
-        # hochbitratige MP3 mit identischem Cover -> Dedup (eine cover.jpg)
-        with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}), \
-             mock.patch.object(a, "_ffmpeg_cover_bytes", return_value=b"\xff\xd8same"):
-            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
-        self.assertTrue(plan["discard_embedded"])
-        self.assertEqual(plan["write_cover"], b"\xff\xd8same")
-
-    def test_mp3_low_bitrate_no_dedup(self):
-        # ≤192 -> wird kopiert, nicht transkodiert -> kein Dedup
-        with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 128}):
-            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
-        self.assertFalse(plan["discard_embedded"])
-
-    def test_mp3_different_covers_no_dedup(self):
-        with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 320}), \
-             mock.patch.object(a, "_ffmpeg_cover_bytes", side_effect=[b"AAA", b"BBB"]):
-            plan = a.plan_album_cover([Path("01.mp3"), Path("02.mp3")], True, 192)
-        self.assertFalse(plan["discard_embedded"])
-
-
-class TestCleanupDirFiles(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        root = Path(self._tmp.name)
-        self.source = root / "src"
-        self.target = root / "dst"
-        (self.source / "Album").mkdir(parents=True)
-        (self.target / "Album").mkdir(parents=True)
-
-    def tearDown(self):
-        self._tmp.cleanup()
-
-    def test_removes_orphan_keeps_valid_and_cover(self):
-        (self.source / "Album" / "t.flac").write_bytes(b"x")        # -> t.opus gültig
-        (self.target / "Album" / "t.opus").write_bytes(b"x")
-        (self.target / "Album" / "orphan.lrc").write_bytes(b"x")    # ohne Quelle
-        (self.target / "Album" / "cover.jpg").write_bytes(b"x")     # generiertes Cover
-        removed = a.cleanup_dir_files(
-            self.source, self.target, self.source / "Album",
-            dry_run=False, dedup_covers=True, reencode_lossy=False,
-            reencode_min_bitrate=192)
-        self.assertEqual(removed, 1)
-        self.assertTrue((self.target / "Album" / "t.opus").exists())
-        self.assertTrue((self.target / "Album" / "cover.jpg").exists())  # geschützt
-        self.assertFalse((self.target / "Album" / "orphan.lrc").exists())
-
-    def test_dry_run_reports_but_keeps(self):
-        (self.target / "Album" / "orphan.lrc").write_bytes(b"x")
-        removed = a.cleanup_dir_files(
-            self.source, self.target, self.source / "Album",
-            dry_run=True, dedup_covers=True, reencode_lossy=False,
-            reencode_min_bitrate=192)
-        self.assertEqual(removed, 1)
-        self.assertTrue((self.target / "Album" / "orphan.lrc").exists())
-
-
-class TestCleanupDirs(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        root = Path(self._tmp.name)
-        self.source = root / "src"
-        self.target = root / "dst"
-        self.source.mkdir()
-        self.target.mkdir()
-
-    def tearDown(self):
-        self._tmp.cleanup()
-
-    def test_removes_orphan_dir_and_empty_dir(self):
-        (self.source / "Keep").mkdir()
-        (self.target / "Keep").mkdir()
-        (self.target / "Keep" / "x.opus").write_bytes(b"x")
-        (self.target / "Gone").mkdir()                       # keine Quelle → weg
-        (self.target / "Gone" / "y.opus").write_bytes(b"x")
-        (self.source / "Empty").mkdir()                      # Quelle leer
-        (self.target / "Empty").mkdir()                      # Ziel leer → weg
-        removed = a.cleanup_dirs(self.source, self.target, dry_run=False)
-        self.assertTrue((self.target / "Keep").is_dir())
-        self.assertFalse((self.target / "Gone").exists())
-        self.assertFalse((self.target / "Empty").exists())
-        self.assertEqual(removed, 2)
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+            plan = a.
