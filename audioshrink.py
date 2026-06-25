@@ -22,6 +22,11 @@ Version 1.3.0:
   - Conversions run in parallel (--jobs N, default 2); log output remains
     per-album in order.
   - Per-file errors do not break the run.
+  - --max-time MIN to stop after approximately MIN minutes, but 
+    only after the current album has finished
+  - --update re-encode targets if target bitrate or comp differ from current
+    settings. Works great together with --max-time to incrementally update
+    the audio libary to newer parameters (bitrate, --comp)
 
 Not yet included (see ROADMAP.md): additional features.
 """
@@ -34,6 +39,7 @@ import logging
 import mutagen
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -547,10 +553,38 @@ def copy(src: Path, dst: Path):
         safe_unlink(dst)
         return False, "Copy failed: %s (%s)" % (src, exc)
 
+def needs_update(dst: Path, target_bitrate: int, target_comp: int) -> tuple[bool, str]:
+    """Checks the target file to see if the bitrate or complexity has changed.
+    Returns (True/False, reason)."""
+    try:
+        # Intentionally omitting easy=True to access the raw ENCODER_OPTIONS
+        audio = mutagen.File(dst)
+        if not audio or getattr(audio, 'tags', None) is None:
+            return True, "No tags found"
+
+        opts_list = audio.tags.get("ENCODER_OPTIONS") or audio.tags.get("encoder_options")
+        if not opts_list:
+            return True, "No ENCODER_OPTIONS found"
+
+        opts_str = str(opts_list[0])
+
+        m_comp = re.search(r'--comp\s+(\d+)', opts_str)
+        m_bitrate = re.search(r'--bitrate\s+(\d+)', opts_str)
+
+        dst_comp = int(m_comp.group(1)) if m_comp else -1
+        dst_bitrate = int(m_bitrate.group(1)) if m_bitrate else -1
+
+        if dst_comp != target_comp or dst_bitrate != target_bitrate:
+            return True, "comp %d->%d, br %d->%d" % (dst_comp, target_comp, dst_bitrate, target_bitrate)
+
+    except Exception:
+        return True, "Failed to read metadata"
+
+    return False, ""
 
 # --- Main Processing --------------------------------------------------------
 def process_one(src: Path, source: Path, target: Path, plan: dict, *,
-                force: bool, dry_run: bool, reencode_lossy: bool,
+                force: bool, update: bool, dry_run: bool, reencode_lossy: bool,
                 reencode_min_bitrate: int, comp: int,
                 strip_covers: bool, cover_max_size):
     """Process a single file (in worker thread). Does not log directly,
@@ -586,8 +620,20 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
             dst = target / rel
 
         compare_size = action == "copy"
-        if not force and is_up_to_date(src, dst, compare_size):
-            return "skipped", [("debug", "Skipped (current): %s" % rel)]
+        is_current = not force and is_up_to_date(src, dst, compare_size)
+
+        # NEW in 1.3.0: Update-Check
+        update_reason = ""
+        if is_current and update and action in ("transcode", "transcode_lossy"):
+            if info is None:
+                info = analyze_audio(src)
+            target_bitrate = determine_bitrate(info)
+            do_update, update_reason = needs_update(dst, target_bitrate, comp)
+            if do_update:
+                is_current = False
+
+        if is_current:
+            return "skipped", [("debug", "Skipped (current): %s" % rel)]                    
 
         if dry_run:
             status = "converted" if action in ("transcode", "transcode_lossy") else "copied"
@@ -600,13 +646,15 @@ def process_one(src: Path, source: Path, target: Path, plan: dict, *,
             ok, err = transcode(src, dst, bitrate, opus_tuning(info),
                                 plan["discard_embedded"], comp)
             if ok:
-                return "converted", [("info", "Converted: %s [%d kbps]" % (rel, bitrate))]
+                prefix = "Updated (%s):" % update_reason if update_reason else "Converted:"
+                return "converted", [("info", "%s %s [%d kbps]" % (prefix, rel, bitrate))]
         elif action == "transcode_lossy":
             bitrate = determine_bitrate(info)
             ok, err = transcode_lossy(src, dst, bitrate, opus_tuning(info), info,
                                       plan["discard_embedded"], comp)
             if ok:
-                return "converted", [("info", "Re-encoded: %s [%d kbps]" % (rel, bitrate))]
+                prefix = "Updated (%s):" % update_reason if update_reason else "Re-encoded:"
+                return "converted", [("info", "%s %s [%d kbps]" % (prefix, rel, bitrate))]
         elif action == "cover_resize":
             ok, err = cover_resize_file(src, dst, cover_max_size)
             if ok:
@@ -637,7 +685,7 @@ def _album_needs_work(files: list, source: Path, target: Path) -> bool:
     return False
 
 
-def run(source: Path, target: Path, *, force: bool, dry_run: bool,
+def run(source: Path, target: Path, *, force: bool, update: bool, dry_run: bool,
         dedup_covers: bool, reencode_lossy: bool, reencode_min_bitrate: int,
         comp: int, strip_covers: bool, cover_max_size,
         jobs: int, cleanup: bool, max_time_minutes: int | None = None) -> int:
@@ -659,7 +707,7 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
             # Process tracks in parallel ...
             futures = [
                 pool.submit(process_one, src, source, target, plan,
-                            force=force, dry_run=dry_run, reencode_lossy=reencode_lossy,
+                            force=force, update=update, dry_run=dry_run, reencode_lossy=reencode_lossy,
                             reencode_min_bitrate=reencode_min_bitrate, comp=comp,
                             strip_covers=strip_covers, cover_max_size=cover_max_size)
                 for src in files
@@ -887,6 +935,10 @@ def main(argv=None) -> int:
         metavar="MIN",
         help="Stop after approximately MIN minutes, but only after the current album has finished",
     )
+    parser.add_argument(
+        "--update", action="store_true",
+        help="Re-encode targets if target bitrate or comp differ from current settings",
+    )
 
     args = parser.parse_args(argv)
 
@@ -924,9 +976,10 @@ def main(argv=None) -> int:
     jobs = max(1, args.jobs)
     comp = min(10, max(0, args.comp))
     log.info("Start | source=%s target=%s | jobs=%d comp=%d", source, target, jobs, comp)
+
     return run(
         source, target,
-        force=args.force, dry_run=args.dry_run, dedup_covers=args.dedup_covers,
+        force=args.force, update=args.update, dry_run=args.dry_run, dedup_covers=args.dedup_covers,
         reencode_lossy=args.reencode_lossy, reencode_min_bitrate=args.reencode_min_bitrate,
         comp=comp, strip_covers=args.strip_covers, cover_max_size=args.cover_max_size,
         jobs=jobs, cleanup=args.cleanup, max_time_minutes=args.max_time,
