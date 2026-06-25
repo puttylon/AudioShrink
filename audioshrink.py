@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AudioShrink – compresses music collections to Opus.
 
-Version 1.0 (first stable release):
+Version 1.3.0:
   - Mirrors directory structure from SOURCE to TARGET (folder by folder).
   - FLAC/WAV/AIFF are transcoded to Opus; bitrate is determined per file
     from sample rate, genre, and source bitrate (via ffprobe).
@@ -38,10 +38,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 # determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
 DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
@@ -639,10 +640,12 @@ def _album_needs_work(files: list, source: Path, target: Path) -> bool:
 def run(source: Path, target: Path, *, force: bool, dry_run: bool,
         dedup_covers: bool, reencode_lossy: bool, reencode_min_bitrate: int,
         comp: int, strip_covers: bool, cover_max_size,
-        jobs: int, cleanup: bool) -> int:
+        jobs: int, cleanup: bool, max_time_minutes: int | None = None) -> int:
     counts = {"converted": 0, "copied": 0, "skipped": 0, "ignored": 0, "error": 0}
     covers = 0
     removed = 0
+    start_time = time.monotonic()
+    stop_requested = False
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         for src_dir, files in walk_by_directory(source, target):
@@ -676,11 +679,27 @@ def run(source: Path, target: Path, *, force: bool, dry_run: bool,
                     source, target, src_dir, dry_run=dry_run,
                     dedup_covers=dedup_covers, reencode_lossy=reencode_lossy,
                     reencode_min_bitrate=reencode_min_bitrate)
+                if max_time_minutes is not None:
+                    elapsed = (time.monotonic() - start_time) / 60
 
+                    if elapsed >= max_time_minutes:
+                        log.info(
+                            "Maximum runtime reached (%.1f min >= %d min). "
+                            "Stopping after completed album: %s",
+                            elapsed,
+                            max_time_minutes,
+                            src_dir,
+                        )
+                        stop_requested = True
+                        break
+    if stop_requested:
+        log.info("Run stopped due to --max-time limit")
+        
     log.info(
         "Done | converted=%d copied=%d skipped=%d covers=%d errors=%d",
         counts["converted"], counts["copied"], counts["skipped"], covers, counts["error"],
     )
+        
 
     # Hybrid cleanup, Part 2: remove orphaned directories + empty folders at end
     if cleanup:
@@ -861,6 +880,14 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--version", action="version", version="%(prog)s " + __version__
     )
+    parser.add_argument(
+        "--max-time",
+        type=int,
+        default=None,
+        metavar="MIN",
+        help="Stop after approximately MIN minutes, but only after the current album has finished",
+    )
+
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -902,7 +929,7 @@ def main(argv=None) -> int:
         force=args.force, dry_run=args.dry_run, dedup_covers=args.dedup_covers,
         reencode_lossy=args.reencode_lossy, reencode_min_bitrate=args.reencode_min_bitrate,
         comp=comp, strip_covers=args.strip_covers, cover_max_size=args.cover_max_size,
-        jobs=jobs, cleanup=args.cleanup,
+        jobs=jobs, cleanup=args.cleanup, max_time_minutes=args.max_time,
     )
 
 
