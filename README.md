@@ -40,6 +40,7 @@ python3 -m venv ~/audioshrink-env
 
 # 3. Install the required Python package inside the environment
 ~/audioshrink-env/bin/pip install mutagen
+```
 
 ---
 
@@ -59,9 +60,9 @@ Example (corresponds to current defaults):
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--jobs N` | `2` | Parallel conversions (leave cores for other NAS tasks). |
+| `--jobs N` | `cores-1` | Parallel conversions (defaults to os.cpu_count() - 1). |
 | `--comp 0..10` | `6` | opusenc complexity (10 = best/slowest, lower = faster). |
-| `--reencode-min-bitrate KBPS` | `320` | Lossy sources **above** this bitrate are re-encoded; below are copied. |
+| `--reencode-min-bitrate KBPS` | `320` | Lossy sources **equal or above** this bitrate are re-encoded; below are copied. |
 | `--no-reencode-lossy` | – | Always copy lossy sources (no re-encode). |
 | `--no-cover-dedup` | – | Do **not** deduplicate album covers (embedded covers remain per file). |
 | `--cover-max-size PX` | – | Resize covers to max dimension (ImageMagick). |
@@ -70,6 +71,8 @@ Example (corresponds to current defaults):
 | `--dry-run` | – | Show all actions (including deletions) without executing. |
 | `--force` | – | Reprocess everything (ignore freshness check). |
 | `--debug` | – | Verbose output (shows skipped files, etc.). |
+| `--max-time MIN` | – | Stop after approximately MIN minutes, but only after the current album has finished. |
+| `--update` | – | Re-encode targets if target bitrate or comp differ from current settings. |
 | `--version` | – | Print version. |
 
 ---
@@ -81,7 +84,7 @@ Example (corresponds to current defaults):
 | Source | Action |
 |---|---|
 | FLAC / WAV / AIFF | → Transcode to Opus |
-| MP3 / AAC / M4A / WMA / OGG / Opus | Bitrate **> threshold** → Re-encode to Opus; otherwise **copy** |
+| MP3 / AAC / M4A / WMA / OGG / Opus | Bitrate **>= threshold** → Re-encode to Opus; otherwise **copy** |
 | Images (jpg/png/…) | Copy; optionally resize (`--cover-max-size`) or remove (`--strip-covers`) |
 | Everything else | Copy |
 

@@ -3,6 +3,21 @@
 Notable changes to AudioShrink. Format inspired by "Keep a Changelog",
 versioning roughly following SemVer.
 
+## 1.3.0
+### Features
+- Added `--max-time MIN` to stop execution after approximately MIN minutes (completes the current album first).
+- Added `--update` to incrementally re-encode targets if the target bitrate or `comp` parameter differ from current settings.
+
+## 1.2.0
+### Changed
+- Replaced `ffprobe` with the native Python library `mutagen` for reading metadata.
+- Eliminates process startup overhead for large libraries, resulting in massive time savings.
+
+## 1.1.0
+### Changed
+- Bitrate threshold (`--reencode-min-bitrate`) now applies inclusively (e.g., `>= 320 kbps`).
+- `--jobs` now defaults to all available CPU cores minus 1 (`os.cpu_count() - 1`) to maximize utilization without freezing the system.
+
 ## 1.0.0 — 2026-06-24
 
 First stable release. Tested in production on a large collection
