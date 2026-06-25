@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """AudioShrink – compresses music collections to Opus.
 
+Version 1.3.2:
+  - Optimized multithreading with album lookahead
+  - Minor optimization
+
 Version 1.3.1:
-  - fixed a bug that occurswhen writing destination files fails
+  - Fixed bugs that occur when writing destination files fail
 
 Version 1.3.0:
   - Mirrors directory structure from SOURCE to TARGET (folder by folder).
@@ -52,7 +56,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 # determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
 DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
@@ -165,7 +169,14 @@ def copy_source_mtime(src: Path, dst: Path) -> None:
 
 
 # --- Audio Analysis & Bitrate Selection -----------------------------------
+# Create a simple cache dictionary in memory
+METADATA_CACHE = {}
 def analyze_audio(path: Path) -> dict:
+    """Read tags/info with caching to avoid redundant disk access."""
+    # Check if we already processed this file in this run
+    if path in METADATA_CACHE:
+        return METADATA_CACHE[path]
+
     """Read sample rate, source bitrate, and tags via mutagen directly in Python.
     On error, return defaults so conversion still proceeds."""
     info = {"sample_rate": 0, "bitrate_kbps": 0, "genre": "", "tags": {}}
@@ -209,6 +220,8 @@ def analyze_audio(path: Path) -> dict:
     except Exception as exc:
         log.warning("mutagen analysis failed: %s (%s)", path, exc)
 
+    # Save the result in the cache before returning it
+    METADATA_CACHE[path] = info
     return info
 
 def is_speech(genre: str) -> bool:
@@ -726,61 +739,88 @@ def run(source: Path, target: Path, *, force: bool, update: bool, dry_run: bool,
     start_time = time.monotonic()
     stop_requested = False
 
+    # Alle Alben sammeln
+    albums = list(walk_by_directory(source, target))
+    if not albums:
+        return 0
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        for src_dir, files in walk_by_directory(source, target):
-            # Album cover plan (serial, before track tasks)
-            plan = {"discard_embedded": False, "write_cover": None}
+        album_iter = iter(albums)
+
+        # function to plan album and pool the tracks
+        def launch_album(src_dir, files):
             if strip_covers:
                 plan = {"discard_embedded": True, "write_cover": None}
             elif dedup_covers and (force or _album_needs_work(files, source, target)):
                 plan = plan_album_cover(files, reencode_lossy, reencode_min_bitrate)
+            else:
+                plan = {"discard_embedded": False, "write_cover": None}
 
-            # Process tracks in parallel ...
-            futures = [
+            futs = [
                 pool.submit(process_one, src, source, target, plan,
-                            force=force, update=update, dry_run=dry_run, reencode_lossy=reencode_lossy,
+                            force=force, update=update, dry_run=dry_run,
+                            reencode_lossy=reencode_lossy,
                             reencode_min_bitrate=reencode_min_bitrate, comp=comp,
                             strip_covers=strip_covers, cover_max_size=cover_max_size)
                 for src in files
             ]
-            # ... but collect output in submission order (readable)
-            for fut in futures:
+            return src_dir, plan, futs
+
+        in_flight = []
+
+        # 2 albums to launch (lookahead), to avoid thread-starvation.
+        # while running album 1, main-thread is preparing album 2.
+        try:
+            in_flight.append(launch_album(*next(album_iter)))
+            in_flight.append(launch_album(*next(album_iter)))
+        except StopIteration:
+            pass
+
+        while in_flight:
+            src_dir, plan, track_futs = in_flight.pop(0)
+
+            # wait for curren albums tracks
+            for fut in track_futs:
                 status, messages = fut.result()
                 for level, msg in messages:
                     getattr(log, level)(msg)
                 counts[status] += 1
 
+            # finalize cover und cleanup for this album
             covers += finalize_album_cover(src_dir, source, target, plan, dry_run, cover_max_size)
 
-            # Hybrid cleanup, Part 1: remove orphaned files from this folder immediately
             if cleanup:
                 removed += cleanup_dir_files(
                     source, target, src_dir, dry_run=dry_run,
                     dedup_covers=dedup_covers, reencode_lossy=reencode_lossy,
                     reencode_min_bitrate=reencode_min_bitrate)
-                if max_time_minutes is not None:
-                    elapsed = (time.monotonic() - start_time) / 60
 
-                    if elapsed >= max_time_minutes:
-                        log.info(
-                            "Maximum runtime reached (%.1f min >= %d min). "
-                            "Stopping after completed album: %s",
-                            elapsed,
-                            max_time_minutes,
-                            src_dir,
-                        )
-                        stop_requested = True
-                        break
+            # check max-time-limit (check only after album is completed)
+            if max_time_minutes is not None and not stop_requested:
+                elapsed = (time.monotonic() - start_time) / 60
+                if elapsed >= max_time_minutes:
+                    log.info(
+                        "Maximum runtime reached (%.1f min >= %d min). "
+                        "Stopping after current queued albums finish.",
+                        elapsed, max_time_minutes
+                    )
+                    stop_requested = True
+
+            # launch next album, if we should not stop
+            if not stop_requested:
+                try:
+                    in_flight.append(launch_album(*next(album_iter)))
+                except StopIteration:
+                    pass
+
     if stop_requested:
         log.info("Run stopped due to --max-time limit")
-        
+
     log.info(
         "Done | converted=%d copied=%d skipped=%d covers=%d errors=%d",
         counts["converted"], counts["copied"], counts["skipped"], covers, counts["error"],
     )
-        
 
-    # Hybrid cleanup, Part 2: remove orphaned directories + empty folders at end
     if cleanup:
         removed += cleanup_dirs(source, target, dry_run=dry_run)
         verb = "would be removed" if dry_run else "removed"
@@ -789,6 +829,7 @@ def run(source: Path, target: Path, *, force: bool, update: bool, dry_run: bool,
         log.info("Cleanup skipped (--no-cleanup)")
 
     return 2 if counts["error"] else 0
+
 
 
 # --- Cleanup -----------------------------------------------------------------
