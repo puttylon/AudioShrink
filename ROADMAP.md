@@ -150,3 +150,9 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 **Focus:** Eliminating process startup overhead for large libraries.
 **New:** Replaced `ffprobe` with the native Python library `mutagen` for reading metadata. Requires a one-time `pip install mutagen` (best done via a virtual environment).
 **Result:** Massive time savings for libraries with >10,000 tracks by avoiding external process spawning per file.
+
+## 1.3 — Incremental Update
+**Status:** ✅ done
+**Focus:** Incrementally update the library if paramaters (comp, bitrate) changed.
+**New:** --max-time MIN limits the time the program runs. --update only reencodes files which do not match the given comp and bitrate paramaters
+**Result:** Large libararies can incrementally updated.
