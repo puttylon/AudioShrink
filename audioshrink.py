@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """AudioShrink – compresses music collections to Opus.
 
+Version 1.3.1:
+  - fixed a bug that occurswhen writing destination files fails
+
 Version 1.3.0:
   - Mirrors directory structure from SOURCE to TARGET (folder by folder).
   - FLAC/WAV/AIFF are transcoded to Opus; bitrate is determined per file
@@ -33,8 +36,8 @@ Not yet included (see ROADMAP.md): additional features.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
-import json
 import logging
 import mutagen
 import os
@@ -45,10 +48,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 # determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
 DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
@@ -92,6 +96,7 @@ def check_dependencies() -> bool:
     return ok    
 
 
+@functools.lru_cache(maxsize=None)
 def im_cmd():
     """Prefer ImageMagick 7 (magick), else 6 (convert); None if neither."""
     for candidate in ("magick", "convert"):
@@ -343,27 +348,36 @@ def plan_album_cover(files: list, reencode_lossy: bool,
 
 
 def write_cover_file(dest: Path, data: bytes, cover_max_size) -> bool:
-    """Write cover bytes to dest, optionally resized via ImageMagick."""
-    if cover_max_size and im_cmd():
-        cmd = [
-            im_cmd(), "-",
-            "-resize", "%dx%d>" % (cover_max_size, cover_max_size),
-            "-strip", "-quality", str(COVER_QUALITY),
-            str(dest),
-        ]
-        try:
+    """Write cover bytes to dest atomically, optionally resized via ImageMagick."""
+    # Generate a unique temporary target
+    temp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
+    
+    try:
+        if cover_max_size and im_cmd():
+            cmd = [
+                im_cmd(), "-",
+                "-resize", "%dx%d>" % (cover_max_size, cover_max_size),
+                "-strip", "-quality", str(COVER_QUALITY),
+                str(temp_dest),
+            ]
             res = subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.PIPE)
-        except OSError as exc:
-            log.error("Album cover could not be resized: %s (%s)", dest, exc)
-            return False
-        if res.returncode != 0:
-            log.error("Album cover could not be resized: %s", dest)
-            return False
+            if res.returncode != 0:
+                log.error("Album cover could not be resized: %s", dest)
+                safe_unlink(temp_dest)
+                return False
+        else:
+            # Write bytes directly to the temp file
+            temp_dest.write_bytes(data)
+            
+        # Atomically replace the destination only on success
+        temp_dest.replace(dest)
         return True
-    dest.write_bytes(data)
-    return True
-
+        
+    except OSError as exc:
+        log.error("Album cover operation failed: %s (%s)", dest, exc)
+        safe_unlink(temp_dest)
+        return False
 
 def finalize_album_cover(src_dir: Path, source: Path, target: Path,
                          plan: dict, dry_run: bool, cover_max_size) -> int:
@@ -521,36 +535,53 @@ def transcode_lossy(src: Path, dst: Path, bitrate: int, tuning: str,
     copy_source_mtime(src, dst)
     return True, None
 
-
 def cover_resize_file(src: Path, dst: Path, cover_max_size: int):
     """Copy a separate cover image resized (ImageMagick).
     Return: (ok, error_message|None)."""
+    
+    # Generate a unique temporary target in the same directory
+    temp_dst = dst.with_name(f"{dst.name}.{uuid.uuid4().hex}.tmp")
+    
     cmd = [
         im_cmd(), str(src),
         "-resize", "%dx%d>" % (cover_max_size, cover_max_size),
         "-strip", "-quality", str(COVER_QUALITY),
-        str(dst),
+        str(temp_dst),  # Direct ImageMagick output to the temporary file
     ]
+    
     try:
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                              text=True)
     except OSError as exc:
-        safe_unlink(dst)
+        # Clean up only the temporary file
+        safe_unlink(temp_dst)
         return False, "Cover resize failed: %s (%s)" % (src, exc)
+        
     if res.returncode != 0:
-        safe_unlink(dst)
+        # Clean up only the temporary file on ImageMagick error
+        safe_unlink(temp_dst)
         return False, "Cover resize failed: %s\n%s" % (src, res.stderr.strip())
-    copy_source_mtime(src, dst)
+        
+    # Apply mtime to the temp file BEFORE replacing the destination
+    copy_source_mtime(src, temp_dst)
+    
+    # Atomically replace the original target
+    temp_dst.replace(dst)
+    
     return True, None
-
 
 def copy(src: Path, dst: Path):
     """Return: (ok, error_message|None)."""
+    temp_dst = dst.with_name(f"{dst.name}.{uuid.uuid4().hex}.tmp")
+    
     try:
-        shutil.copy2(src, dst)  # preserves mtime
+        shutil.copy2(src, temp_dst)
+        temp_dst.replace(dst)
         return True, None
+        
     except OSError as exc:
-        safe_unlink(dst)
+        safe_unlink(temp_dst)
+        #return False, f"Copy failed: {src} ({exc})"
         return False, "Copy failed: %s (%s)" % (src, exc)
 
 def needs_update(dst: Path, target_bitrate: int, target_comp: int) -> tuple[bool, str]:
@@ -975,7 +1006,17 @@ def main(argv=None) -> int:
 
     jobs = max(1, args.jobs)
     comp = min(10, max(0, args.comp))
-    log.info("Start | source=%s target=%s | jobs=%d comp=%d", source, target, jobs, comp)
+
+    log.info(
+            "Start processing. Parameters:\n"
+            "  > Paths:  source='%s', target='%s'\n"
+            "  > System: jobs=%d, max_time=%s, cleanup=%s, force=%s, dry_run=%s\n"
+            "  > Audio:  comp=%d, update=%s, reencode_lossy=%s, min_bitrate=%s\n"
+            "  > Cover:  dedup=%s, strip=%s, max_size=%s",
+            source, target, jobs, args.max_time, args.cleanup, args.force, args.dry_run,
+            comp, args.update, args.reencode_lossy, args.reencode_min_bitrate,
+            args.dedup_covers, args.strip_covers, args.cover_max_size
+        )
 
     return run(
         source, target,
