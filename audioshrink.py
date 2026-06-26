@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """AudioShrink – compresses music collections to Opus.
 
+Version 1.3.3:
+  - Bitrate ist now 96 except für speech(64) and classical(112)
+
 Version 1.3.2:
   - Optimized multithreading with album lookahead
   - Minor optimization
@@ -56,7 +59,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 # determine cores, subtract 1, but is at least 1 job. (os.cpu_count() maybe is None)
 DEFAULT_JOBS = max(1, (os.cpu_count() or 2) - 1)
 DEFAULT_COMP = 6    # opusenc complexity 0..10 (10=best/slowest); lower=faster
@@ -77,8 +80,12 @@ COVER_QUALITY = 85                                   # JPEG quality when resizin
 OPUS_SOURCE_CANDIDATES = LOSSLESS_FORMATS | {TARGET_EXT}
 
 # Bitrate selection
+DEFAULT_BITRATE = 96
 SPEECH_GENRES = {"hörbuch", "audiobook", "speech", "podcast", "spoken", "hörspiel"}
 SPEECH_BITRATE = 64
+CLASSICAL_GENRES = {"classic", "klassik"}
+CLASSICAL_BITRATE = 112
+
 
 DRY_VERB = {
     "transcode": "would convert",
@@ -228,26 +235,25 @@ def is_speech(genre: str) -> bool:
     g = (genre or "").lower()
     return any(term in g for term in SPEECH_GENRES)
 
+def is_classical(genre: str) -> bool:
+    g = (genre or "").lower()
+    return any(term in g for term in CLASSICAL_GENRES)
 
 def determine_bitrate(info: dict) -> int:
-    """Bitrate from sample rate (base), genre, and source bitrate (cap)."""
-    sr = info.get("sample_rate", 0)
-    if sr >= 96000:
-        bitrate = 160
-    elif sr >= 48000:
-        bitrate = 128
-    else:
-        bitrate = 96  # e.g. 44.1 kHz CD material
+    """Bitrate from genre and source bitrate (cap)."""
+    bitrate = DEFAULT_BITRATE
 
     if is_speech(info.get("genre", "")):
         bitrate = min(bitrate, SPEECH_BITRATE)
+    
+    if is_classical(info.get("genre", "")):
+        bitrate = min(bitrate, CLASSICAL_BITRATE)
 
     src_br = info.get("bitrate_kbps", 0)
     if src_br > 0:                       # never higher than source
         bitrate = min(bitrate, src_br)
 
     return bitrate
-
 
 def opus_tuning(info: dict) -> str:
     return "--speech" if is_speech(info.get("genre", "")) else "--music"
@@ -779,7 +785,7 @@ def run(source: Path, target: Path, *, force: bool, update: bool, dry_run: bool,
         while in_flight:
             src_dir, plan, track_futs = in_flight.pop(0)
 
-            # wait for curren albums tracks
+            # wait for tracks of the current album
             for fut in track_futs:
                 status, messages = fut.result()
                 for level, msg in messages:
