@@ -13,20 +13,29 @@ import audioshrink as a
 
 
 class TestDetermineBitrate(unittest.TestCase):
-    def test_samplerate_base(self):
-        self.assertEqual(a.determine_bitrate({"sample_rate": 96000}), 160)
-        self.assertEqual(a.determine_bitrate({"sample_rate": 192000}), 160)
-        self.assertEqual(a.determine_bitrate({"sample_rate": 48000}), 128)
-        self.assertEqual(a.determine_bitrate({"sample_rate": 44100}), 96)
+    def test_default_bitrate(self):
+        # Sample rate no longer affects bitrate; all music defaults to 96 kbps
+        self.assertEqual(a.determine_bitrate({}), 96)
+        self.assertEqual(a.determine_bitrate({"genre": "Rock"}), 96)
+        self.assertEqual(a.determine_bitrate({"sample_rate": 96000}), 96)
+        self.assertEqual(a.determine_bitrate({"sample_rate": 48000}), 96)
         self.assertEqual(a.determine_bitrate({"sample_rate": 0}), 96)
 
     def test_speech_caps_to_64(self):
-        self.assertEqual(a.determine_bitrate({"sample_rate": 96000, "genre": "Hörbuch"}), 64)
-        self.assertEqual(a.determine_bitrate({"sample_rate": 48000, "genre": "an Audiobook"}), 64)
+        self.assertEqual(a.determine_bitrate({"genre": "Hörbuch"}), 64)
+        self.assertEqual(a.determine_bitrate({"genre": "an Audiobook"}), 64)
+
+    def test_classical_gets_112(self):
+        self.assertEqual(a.determine_bitrate({"genre": "Klassik"}), 112)
+        self.assertEqual(a.determine_bitrate({"genre": "Classical"}), 112)
+        self.assertEqual(a.determine_bitrate({"genre": "classic"}), 112)
 
     def test_source_bitrate_cap(self):
-        self.assertEqual(a.determine_bitrate({"sample_rate": 44100, "bitrate_kbps": 80}), 80)
-        self.assertEqual(a.determine_bitrate({"sample_rate": 44100, "bitrate_kbps": 900}), 96)
+        self.assertEqual(a.determine_bitrate({"bitrate_kbps": 80}), 80)
+        self.assertEqual(a.determine_bitrate({"bitrate_kbps": 900}), 96)
+        # Classical also capped at source bitrate
+        self.assertEqual(a.determine_bitrate({"genre": "Klassik", "bitrate_kbps": 80}), 80)
+        self.assertEqual(a.determine_bitrate({"genre": "Klassik", "bitrate_kbps": 900}), 112)
 
 
 class TestIsSpeech(unittest.TestCase):
@@ -39,32 +48,45 @@ class TestIsSpeech(unittest.TestCase):
             self.assertFalse(a.is_speech(g))
 
 
+class TestIsClassical(unittest.TestCase):
+    def test_matches(self):
+        for g in ("Klassik", "classic", "Classical", "Neo-Classic"):
+            self.assertTrue(a.is_classical(g), g)
+
+    def test_non_matches(self):
+        for g in ("Rock", "", None, "Hörbuch"):
+            self.assertFalse(a.is_classical(g))
+
+
 class TestShouldReencode(unittest.TestCase):
     def test_above_threshold(self):
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}, 192))
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 256}, 192))
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 245}, 192))
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 321}, 192))
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 256}, 192))
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 245}, 192))
 
-    def test_at_or_below_threshold(self):
-        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 192}, 192))
-        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128}, 192))
-        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 0}, 192))
+    def test_at_threshold_is_reencoded(self):
+        # Threshold is inclusive (>=): at threshold → re-encode
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 192}, 192))
+
+    def test_below_threshold(self):
+        self.assertFalse(a.should_reencode({"bitrate_kbps": 128}, 192))
+        self.assertFalse(a.should_reencode({"bitrate_kbps": 0}, 192))
 
     def test_genre_irrelevant_for_decision(self):
         # 320 kbps audiobook → re-encode (decision based only on bitrate) ...
-        info_high = {"sample_rate": 44100, "bitrate_kbps": 320, "genre": "Hörbuch"}
+        info_high = {"bitrate_kbps": 320, "genre": "Hörbuch"}
         self.assertTrue(a.should_reencode(info_high, 192))
         # ... but the TARGET bitrate remains genre-dependent (Speech → 64)
         self.assertEqual(a.determine_bitrate(info_high), 64)
-        # 128 kbps audiobook → copy
+        # 128 kbps audiobook below threshold → copy
         self.assertFalse(
-            a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 128, "genre": "Hörbuch"}, 192))
+            a.should_reencode({"bitrate_kbps": 128, "genre": "Hörbuch"}, 192))
 
-    def test_default_and_custom_threshold(self):
-        # Default threshold is 320
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 400}))
-        self.assertFalse(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 320}))
-        self.assertTrue(a.should_reencode({"sample_rate": 44100, "bitrate_kbps": 160}, 128))
+    def test_default_threshold_320_inclusive(self):
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 400}))   # above → re-encode
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 320}))   # at default threshold → re-encode
+        self.assertFalse(a.should_reencode({"bitrate_kbps": 319}))  # below → copy
+        self.assertTrue(a.should_reencode({"bitrate_kbps": 160}, 128))  # custom threshold
 
 
 class TestBuildMetadataOpts(unittest.TestCase):
@@ -140,9 +162,7 @@ class TestIsUpToDate(unittest.TestCase):
         dst.write_bytes(b"123")
         os.utime(src, (1000, 1000))
         os.utime(dst, (1000, 1000))
-        # Copy: size differs → not up to date
         self.assertFalse(a.is_up_to_date(src, dst, compare_size=True))
-        # Transcoding: size ignored → up to date
         self.assertTrue(a.is_up_to_date(src, dst, compare_size=False))
 
 
@@ -193,23 +213,23 @@ class TestSourceHasCounterpart(unittest.TestCase):
         self._src("song.mp3")
         tf = self._tgt("song.mp3")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
+                               return_value={"bitrate_kbps": 400}):
             self.assertFalse(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_reencode_keeps_opus(self):
         self._src("song.mp3")
         tf = self._tgt("song.opus")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
+                               return_value={"bitrate_kbps": 400}):
             self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_opus_orphan_when_source_below_threshold(self):
-        # song.mp3 (256k) with threshold 320 -> is copied, NOT re-encoded
-        # -> an existing song.opus (from a run with a lower threshold) is orphaned
+        # song.mp3 (256k) with threshold 320 → copied, not re-encoded
+        # → an existing song.opus (from a run with a lower threshold) is orphaned
         self._src("song.mp3")
         tf = self._tgt("song.opus")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 256}):
+                               return_value={"bitrate_kbps": 256}):
             self.assertFalse(
                 a.source_has_counterpart(tf, self.source, self.target, True, 320))
 
@@ -217,12 +237,12 @@ class TestSourceHasCounterpart(unittest.TestCase):
         self._src("song.mp3")
         tf = self._tgt("song.opus")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 400}):
+                               return_value={"bitrate_kbps": 400}):
             self.assertTrue(
                 a.source_has_counterpart(tf, self.source, self.target, True, 320))
 
     def test_opus_valid_from_flac_regardless_of_lossy_sibling(self):
-        # song.opus comes from song.flac -> valid, even if song.mp3 (<=threshold) is next to it
+        # song.opus from song.flac → valid, even if song.mp3 (≤threshold) sits next to it
         self._src("song.flac")
         self._src("song.mp3")
         tf = self._tgt("song.opus")
@@ -233,7 +253,7 @@ class TestSourceHasCounterpart(unittest.TestCase):
         self._src("song.mp3")
         tf = self._tgt("song.mp3")
         with mock.patch.object(a, "analyze_audio",
-                               return_value={"sample_rate": 44100, "bitrate_kbps": 64}):
+                               return_value={"bitrate_kbps": 64}):
             self.assertTrue(a.source_has_counterpart(tf, self.source, self.target, True))
 
     def test_no_reencode_keeps_mp3(self):
@@ -262,4 +282,17 @@ class TestPlanAlbumCover(unittest.TestCase):
 
     def test_flac_different_embedded_covers(self):
         with mock.patch.object(a, "embedded_cover_bytes", side_effect=[b"AAA", b"BBB"]):
-            plan = a.
+            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
+        self.assertFalse(plan["discard_embedded"])
+        self.assertIsNone(plan["write_cover"])
+
+    def test_flac_missing_cover_no_dedup(self):
+        # At least one track without cover → no deduplication
+        with mock.patch.object(a, "embedded_cover_bytes", return_value=None):
+            plan = a.plan_album_cover([Path("01.flac"), Path("02.flac")], False, 192)
+        self.assertFalse(plan["discard_embedded"])
+        self.assertIsNone(plan["write_cover"])
+
+
+if __name__ == "__main__":
+    unittest.main()

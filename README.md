@@ -88,8 +88,8 @@ Example (corresponds to current defaults):
 | Images (jpg/png/…) | Copy; optionally resize (`--cover-max-size`) or remove (`--strip-covers`) |
 | Everything else | Copy |
 
-**Target bitrate (when encoding):** derived from sample rate – ≥ 96 kHz → 160, ≥ 48 kHz → 128,
-otherwise 96 kbps; for speech genres (audiobook/podcast/…) → **64 kbps + `--speech`**.
+**Target bitrate (when encoding):** 96 kbps by default; speech genres (audiobook/podcast/…) →
+**64 kbps + `--speech`**; classical genres (klassik/classic/…) → **112 kbps**.
 Never higher than the source bitrate.
 
 > Important: The **re-encode decision** depends **only on bitrate** (not genre).

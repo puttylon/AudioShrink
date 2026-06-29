@@ -156,3 +156,44 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 **Focus:** Incrementally update the library if paramaters (comp, bitrate) changed.
 **New:** --max-time MIN limits the time the program runs. --update only reencodes files which do not match the given comp and bitrate paramaters
 **Result:** Large libararies can incrementally updated.
+
+## 1.3.x — Bugfixes & Testbasis
+**Status:** ✅ done
+**Focus:** Korrektheit und stabile Testbasis
+- **Classical-Bitrate-Bug:** `min()` → `max()` in `determine_bitrate` für Klassik-Genres.
+  `CLASSICAL_BITRATE = 112` war toter Code, da `min(96, 112) = 96` — Klassik bekam nie 112 kbps.
+- **Truncated Test-File:** `test_audioshrink.py` endete mitten in einer Zeile (Syntax-Error).
+  Datei kompletiert, veraltete samplerate-basierte Bitrate-Tests durch aktuelle Genre-Tests ersetzt,
+  Schwellenwert-Tests für inklusive `>=`-Semantik korrigiert, `TestIsClassical` ergänzt.
+- **`requirements.txt`** angelegt (`mutagen>=1.45`).
+- **Doppelter Docstring** in `analyze_audio` entfernt.
+
+---
+
+## 1.4 — Sichtbarkeit & Qualität
+**Status:** 🔲 planned
+**Focus:** Nutzerfreundlichkeit bei großen Bibliotheken.
+- **Fortschrittsanzeige:** `Album 23/450 – Künstler/Albumtitel` während langer Läufe.
+  Bei 300+ GB-Bibliotheken gibt es aktuell kein Gesamtgefühl für den Fortschritt.
+- **Größenstatistik:** Gesamteinsparung (Quell- vs. Zielgröße in MB/GB, Prozent) im
+  abschließenden Summary-Log.
+- **WebP-Cover-Fix:** `_write_tmp_image()` erkennt WebP-Magicbytes (`RIFF…WEBP`)
+  und schreibt korrekte `.webp`-Extension statt `.jpg` (Known Issue aus CONCEPT.md §8).
+
+## 1.5 — Robustheit
+**Status:** 🔲 planned
+**Focus:** Weniger externe Abhängigkeiten, saubererer State.
+- **FLAC-Cover-Fallback auf ffmpeg:** Wenn `metaflac` fehlt, fällt Cover-Dedup
+  komplett weg. `_ffmpeg_cover_bytes()` funktioniert auch mit FLAC — als Fallback
+  einbauen statt komplett deaktivieren.
+- **METADATA_CACHE als lokale Variable:** Globaler Modul-State verhindert korrekten
+  Betrieb bei wiederholtem Aufruf im selben Prozess (z. B. in Tests oder als Modul
+  importiert). Cache-Scope auf `run()`-Aufruf begrenzen.
+
+## 1.6 — Usability (optional)
+**Status:** 🔲 planned
+**Focus:** Operativer Komfort für NAS-Betrieb.
+- **`--stats`-Flag:** Übersicht der Quell-Formate (Anzahl FLAC/MP3/AAC/…) ohne
+  Konvertierung — nützlich vor dem ersten Lauf.
+- **`--log-file PATH`:** Ausgabe zusätzlich in Datei schreiben für
+  unbeaufsichtigte Läufe.
