@@ -172,20 +172,15 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 
 ## 1.4 — Sichtbarkeit & Qualität
 **Status:** 🔲 planned
-**Focus:** Nutzerfreundlichkeit bei großen Bibliotheken.
-- **Fortschrittsanzeige:** `Album 23/450 – Künstler/Albumtitel` während langer Läufe.
-  Bei 300+ GB-Bibliotheken gibt es aktuell kein Gesamtgefühl für den Fortschritt.
+**Focus:** Auswertbarkeit im Log (primärer Betrieb via Cron/NAS, kein interaktiver Zuschauer).
 - **Größenstatistik:** Gesamteinsparung (Quell- vs. Zielgröße in MB/GB, Prozent) im
-  abschließenden Summary-Log.
+  abschließenden Summary-Log — nützlich zum Nachlesen nach dem Cron-Lauf.
 - **WebP-Cover-Fix:** `_write_tmp_image()` erkennt WebP-Magicbytes (`RIFF…WEBP`)
   und schreibt korrekte `.webp`-Extension statt `.jpg` (Known Issue aus CONCEPT.md §8).
 
 ## 1.5 — Robustheit
 **Status:** 🔲 planned
 **Focus:** Weniger externe Abhängigkeiten, saubererer State.
-- **FLAC-Cover-Fallback auf ffmpeg:** Wenn `metaflac` fehlt, fällt Cover-Dedup
-  komplett weg. `_ffmpeg_cover_bytes()` funktioniert auch mit FLAC — als Fallback
-  einbauen statt komplett deaktivieren.
 - **METADATA_CACHE als lokale Variable:** Globaler Modul-State verhindert korrekten
   Betrieb bei wiederholtem Aufruf im selben Prozess (z. B. in Tests oder als Modul
   importiert). Cache-Scope auf `run()`-Aufruf begrenzen.
