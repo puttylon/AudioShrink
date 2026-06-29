@@ -100,12 +100,10 @@ log = logging.getLogger("audioshrink")
 
 # --- Helper Functions --------------------------------------------------------
 def check_dependencies() -> bool:
-    ok = True
-    for tool in ["opusenc"]:
-        if shutil.which(tool) is None:
-            log.error("Required dependency missing: %s", tool)
-            ok = False
-    return ok
+    if shutil.which("opusenc") is None:
+        log.error("Required dependency missing: opusenc")
+        return False
+    return True
 
 
 @functools.lru_cache(maxsize=None)
@@ -144,13 +142,11 @@ def walk_by_directory(source: Path, target: Path):
 
 def is_up_to_date(src: Path, dst: Path, compare_size: bool) -> bool:
     """True if target can be considered current and skipped."""
-    if not dst.exists():
-        return False
     try:
         s = src.stat()
         d = dst.stat()
     except OSError:
-        return False  # When in doubt, process
+        return False  # dst missing or unreadable → process
     if s.st_mtime > d.st_mtime + MTIME_TOLERANCE:  # Source significantly newer
         return False
     if compare_size and s.st_size != d.st_size:  # Pure copy: also check size
@@ -178,7 +174,6 @@ def copy_source_mtime(src: Path, dst: Path) -> None:
 
 
 # --- Audio Analysis & Bitrate Selection -----------------------------------
-# Create a simple cache dictionary in memory
 METADATA_CACHE = {}
 
 
@@ -204,8 +199,7 @@ def analyze_audio(path: Path) -> dict:
         tags = {}
         if getattr(audio, "tags", None):
             for key, val in audio.tags.items():
-                # mutagen liefert Werte oft als Listen (z.B. ['Rock'])
-                if isinstance(val, list) and len(val) > 0:
+                if isinstance(val, list) and val:
                     str_val = str(val[0])
                 else:
                     str_val = str(val)
@@ -234,7 +228,6 @@ def analyze_audio(path: Path) -> dict:
     except Exception as exc:
         log.warning("mutagen analysis failed: %s (%s)", path, exc)
 
-    # Save the result in the cache before returning it
     METADATA_CACHE[path] = info
     return info
 
@@ -407,9 +400,10 @@ def write_cover_file(dest: Path, data: bytes, cover_max_size) -> bool:
     temp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
 
     try:
-        if cover_max_size and im_cmd():
+        magick = im_cmd()
+        if cover_max_size and magick:
             cmd = [
-                im_cmd(),
+                magick,
                 "-",
                 "-resize",
                 "%dx%d>" % (cover_max_size, cover_max_size),
@@ -684,7 +678,6 @@ def copy(src: Path, dst: Path):
 
     except OSError as exc:
         safe_unlink(temp_dst)
-        # return False, f"Copy failed: {src} ({exc})"
         return False, "Copy failed: %s (%s)" % (src, exc)
 
 
@@ -776,7 +769,6 @@ def process_one(
         compare_size = action == "copy"
         is_current = not force and is_up_to_date(src, dst, compare_size)
 
-        # NEW in 1.3.0: Update-Check
         update_reason = ""
         if is_current and update and action in ("transcode", "transcode_lossy"):
             if info is None:
@@ -882,7 +874,6 @@ def run(
     start_time = time.monotonic()
     stop_requested = False
 
-    # Alle Alben sammeln
     albums = list(walk_by_directory(source, target))
     if not albums:
         return 0
@@ -890,7 +881,6 @@ def run(
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         album_iter = iter(albums)
 
-        # function to plan album and pool the tracks
         def launch_album(src_dir, files):
             if strip_covers:
                 plan = {"discard_embedded": True, "write_cover": None}
