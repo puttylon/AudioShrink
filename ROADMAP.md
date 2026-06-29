@@ -175,8 +175,6 @@ final review (compiles cleanly, tests pass), git tag `v1.0.0`. Distribution:
 **Focus:** Auswertbarkeit im Log (primärer Betrieb via Cron/NAS, kein interaktiver Zuschauer).
 - **Größenstatistik:** Gesamteinsparung (Quell- vs. Zielgröße in MB/GB, Prozent) im
   abschließenden Summary-Log — nützlich zum Nachlesen nach dem Cron-Lauf.
-- **WebP-Cover-Fix:** `_write_tmp_image()` erkennt WebP-Magicbytes (`RIFF…WEBP`)
-  und schreibt korrekte `.webp`-Extension statt `.jpg` (Known Issue aus CONCEPT.md §8).
 
 ## 1.5 — Robustheit
 **Status:** 🔲 planned
