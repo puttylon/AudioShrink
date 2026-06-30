@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.flac
 *.lrc
+*.jpg
 *.opus
 /flac
 /opus
